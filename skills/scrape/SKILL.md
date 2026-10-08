@@ -13,7 +13,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 ## 쓰는 도구
 
-- **Playwright MCP** (`browser_navigate`, `browser_evaluate`, `browser_run_code_unsafe`, `browser_network_requests`, `browser_take_screenshot`, `browser_click`…). 사용자가 직접 보고 조작할 수 있는 실제 Chrome 창입니다. 이 도구들이 없으면 멈추고 추가 방법을 알려주세요: `claude plugin install playwright` 또는 `claude mcp add --scope user playwright -- npx @playwright/mcp@latest`, 그다음 Claude Code 재시작.
+- **Playwright MCP** (`browser_navigate`, `browser_evaluate`, `browser_run_code_unsafe`, `browser_network_requests`, `browser_take_screenshot`, `browser_click`, `browser_close`…). 사용자가 직접 보고 조작할 수 있는 실제 Chrome 창입니다. 이 창은 작업이 끝나도 저절로 닫히지 않으니, 열었으면 마지막에 `browser_close`로 닫으세요(4단계 6번). 이 도구들이 없으면 멈추고 추가 방법을 알려주세요: `claude plugin install playwright` 또는 `claude mcp add --scope user playwright -- npx @playwright/mcp@latest`, 그다음 Claude Code 재시작.
 - **페이지 주입 헬퍼** `<skill-dir>/scripts/page/helpers.js`. `window.__scrape`로 노출됩니다. 탭당 한 번 설치:
   ```
   browser_run_code_unsafe  code:
@@ -77,8 +77,9 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 3. `node collect.mjs <name> --dry-run` → 채움률 확인. 80% 미만인 필드는 보통 셀렉터가 틀렸거나 지연 로딩입니다. 전체 실행 전에 고치세요. 예외 둘: (a) `detail` 필드는 dry-run이 상세 페이지를 최대 3개만 방문하므로 낮게 나오는 게 정상입니다. 방문한 건수 대비로만 보세요(3건 방문에 3건 채움이면 정상). (b) 모든 필드가 0%면 셀렉터보다 차단·헤드리스를 먼저 의심하고 `--dry-run --headful`로 다시 돌리세요. 그때 채워지면 헤드리스 차단입니다.
 4. `node collect.mjs <name> --max-pages N`. 기본 출력 `~/Downloads/<name>-<date>.csv`. stdout 마지막 줄이 JSON 요약입니다. `stopped_reason`, `fill_rate`, `sample`을 읽으세요.
 5. 평이한 말로 보고: 파일 위치, 행·페이지 수, 빈 칸이 있는 필드와 그 개수, 샘플 3행. 그리고: "다음에 '<name> 레시피 다시 돌려줘'라고 하시면 새로 받아옵니다."
+6. 보고를 마쳤으면 분석·확인에 썼던 Playwright MCP 브라우저를 `browser_close`로 닫습니다. 이 창은 작업이 끝나도 저절로 닫히지 않으므로, 열었으면 마지막에 반드시 닫으세요. 예외: 사용자가 `--cdp`로 자기 Chrome을 연결했거나 직접 로그인·챌린지를 통과한 창이면 닫지 않습니다(그 창은 사용자의 것입니다). 수집기(`collect.mjs`)가 띄우는 자체 Chrome은 스스로 닫으므로 대상이 아닙니다.
 
-작은 작업 지름길: 한 페이지, 50행 이하, 상세 페이지 없음 → `browser_evaluate`로 `() => window.__scrape.extract(fields, container)`를 호출해 배열을 그대로 받으세요(`JSON.stringify`하지 않습니다. 문자열로 받으면 `filename` 저장 시 이중 인코딩됩니다). 받은 배열을 Bash heredoc으로 `rows.json`에 쓰고 `node <skill-dir>/scripts/write-csv.mjs rows.json --name <name>`으로 CSV를 만듭니다(UTF-8 BOM, 엑셀에서 한글 정상). 레시피를 남기지 않으므로 끝맺음은 '다음에도 같은 요청을 하시면 됩니다'로 하세요('레시피 다시 돌려줘'가 아니라).
+작은 작업 지름길: 한 페이지, 50행 이하, 상세 페이지 없음 → `browser_evaluate`로 `() => window.__scrape.extract(fields, container)`를 호출해 배열을 그대로 받으세요(`JSON.stringify`하지 않습니다. 문자열로 받으면 `filename` 저장 시 이중 인코딩됩니다). 받은 배열을 Bash heredoc으로 `rows.json`에 쓰고 `node <skill-dir>/scripts/write-csv.mjs rows.json --name <name>`으로 CSV를 만듭니다(UTF-8 BOM, 엑셀에서 한글 정상). 레시피를 남기지 않으므로 끝맺음은 '다음에도 같은 요청을 하시면 됩니다'로 하세요('레시피 다시 돌려줘'가 아니라). 이 경로도 끝나면 6번처럼 `browser_close`로 창을 닫습니다.
 
 ### 5. 재실행과 수리
 
