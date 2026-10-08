@@ -34,7 +34,10 @@
     c.length > 28 ||
     /[0-9a-f]{6,}/i.test(c) ||
     /\d{4,}/.test(c) ||
-    /^(css|sc|jss|emotion|chakra|mui|svelte|_|styles?_|ng-|v-)[-_]?[a-z0-9]*$/i.test(c) ||
+    // CSS-in-JS prefixes count only when a separator and a hash follow (sc-bdVaJa, css-1k2j3h, styles_card__3x9Qz);
+    // a bare "sc"/"css" prefix wrongly flagged ordinary classes like score, scroll, search.
+    /^(css|sc|jss|emotion|chakra|mui|svelte|styles?)[-_][A-Za-z0-9_]{4,}$/i.test(c) ||
+    /^(ng-|v-|_)/.test(c) ||
     /^[a-zA-Z]{1,3}[-_]?[A-Za-z0-9]{5,}$/.test(c) && /\d/.test(c) && /[A-Z]/.test(c);
   const STATE_CLASS = /^(active|selected|hover|focus|open|show|shown|hidden|visible|js-|is-|has-|was-|current|loaded|lazy|loading)/;
   const goodClasses = (el) => [...el.classList].filter((c) => !hashy(c) && !STATE_CLASS.test(c)).slice(0, 2);
@@ -64,31 +67,47 @@
     root = root || document;
     if (el === root) return ':scope';
     const parts = [];
+    const scope = root === document ? document : root;
+    // Does [p, ...parts] pin exactly one element inside root? Tested as a descendant chain, which is the
+    // conservative reading (if it is unique as a descendant it is unique as a child chain too).
+    const unique = (p) => {
+      try {
+        const sel = [p, ...parts].join(' > ');
+        return scope.querySelectorAll(root === document ? sel : ':scope ' + sel).length === 1;
+      } catch (e) {
+        return false;
+      }
+    };
     let cur = el;
+    let top = null; // highest element included in the chain
     while (cur && cur !== root && cur !== document.documentElement && cur.nodeType === 1) {
-      let part = ident(cur);
+      top = cur;
+      const plain = ident(cur);
       const parent = cur.parentElement;
-      if (part.startsWith('#')) {
-        parts.unshift(part);
+      if (plain.startsWith('#')) {
+        parts.unshift(plain);
         break;
       }
+      // A semantic part (tag.class, tag[data-*]) that already pins the element inside root wins over any
+      // :nth-of-type — "span.score", not "span:nth-of-type(1)". Position is the last resort.
+      if (plain !== tag(cur) && unique(plain)) {
+        parts.unshift(plain);
+        break;
+      }
+      let part = plain;
       if (parent) {
-        const same = [...parent.children].filter((c) => c !== cur && c.matches(part));
+        const same = [...parent.children].filter((c) => c !== cur && c.matches(plain));
         if (same.length) part += `:nth-of-type(${nthOfType(cur)})`;
       }
+      const done = unique(part);
       parts.unshift(part);
-      const sel = parts.join(' > ');
-      try {
-        const scope = root === document ? document : root;
-        const n = scope.querySelectorAll(sel.startsWith(':scope') ? sel : (root === document ? sel : ':scope > ' + sel));
-        if (n.length === 1) break;
-      } catch (e) {
-        /* keep climbing */
-      }
+      if (done) break;
       cur = parent;
     }
     let sel = parts.join(' > ');
-    if (root !== document && !sel.startsWith(':scope')) sel = ':scope > ' + sel;
+    // Inside a root: a chain that starts at a direct child keeps ">", one that stopped early at a semantic
+    // ancestor is a descendant selector (":scope span.score").
+    if (root !== document && !sel.startsWith(':scope')) sel = (top && top.parentElement === root ? ':scope > ' : ':scope ') + sel;
     return sel;
   };
   const cssPath = (el) => pathWithin(el, document);
@@ -115,10 +134,26 @@
     }
     return best;
   };
-  const itemSelector = (info) => {
-    const base = cssPath(info.listEl);
-    return (base === ':scope' ? '' : base + ' > ') + ident(info.itemEl);
+  // Shortest selector that matches exactly these list items and nothing else on the page: "div.quote" beats
+  // "div.row:nth-of-type(2) > div.col-md-8 > div.quote" and survives layout shuffles. Falls back to the full
+  // path when a short form would also catch items elsewhere.
+  const listSelector = (listEl, items) => {
+    const want = new Set(items);
+    const exact = (sel) => {
+      try {
+        const got = qsa(sel);
+        return got.length === want.size && got.every((e) => want.has(e));
+      } catch (e) {
+        return false;
+      }
+    };
+    const item = ident(items[0]);
+    const base = cssPath(listEl);
+    const fallback = (base === ':scope' ? '' : base + ' > ') + item;
+    for (const c of [item, ident(listEl) + ' > ' + item, fallback]) if (exact(c)) return c;
+    return fallback;
   };
+  const itemSelector = (info) => listSelector(info.listEl, [...info.listEl.children].filter((c) => signature(c) === signature(info.itemEl)));
 
   // ---------- extraction (shared with scripts/collect.mjs) ----------
   const value = (e, spec) => {
@@ -268,7 +303,7 @@
           item_count: item.count,
           field_selector: field,
           field_matches_in_items: qsa(container).filter((it) => qsa(field, it).length).length,
-          recipe_hint: { container, field: field.replace(/^:scope > /, '') },
+          recipe_hint: { container, field: field.replace(/^:scope(?: > | )/, '') },
         };
       } else if (genCount > 1) res.repeats = { selector: general, count: genCount };
       return res;
@@ -305,7 +340,7 @@
     }
     out.sort((a, b) => b.score - a.score);
     return out.slice(0, opts.limit || 5).map(({ parent, items, score }) => {
-      const container = (cssPath(parent) === ':scope' ? '' : cssPath(parent) + ' > ') + ident(items[0]);
+      const container = listSelector(parent, items);
       return {
         container,
         count: items.length,
@@ -324,7 +359,7 @@
     const res = [];
     const seenSel = new Set();
     for (const e of leaves.slice(0, 60)) {
-      const rel = pathWithin(e, first).replace(/^:scope > /, '');
+      const rel = pathWithin(e, first).replace(/^:scope(?: > | )/, '');
       if (seenSel.has(rel)) continue;
       seenSel.add(rel);
       const samples = [e, ...probe.map((it) => qsa(rel, it)[0])].map((x) => (x ? cut(norm(x.textContent) || x.getAttribute('alt') || x.getAttribute('href') || '', 60) : null));
