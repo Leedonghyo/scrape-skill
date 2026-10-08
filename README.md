@@ -1,5 +1,7 @@
 # scrape — 사이트에서 데이터가 필요한 사람을 위한 Claude Code 스킬
 
+*Web scraping skill for Claude Code: describe the data, get a CSV — no selectors, no code. (web scraping · crawler · Playwright · Claude Code plugin · 크롤링 · 데이터 수집)*
+
 URL 하나와 한 문장을 주면 CSV로 받습니다. 셀렉터, 코드, 스크래핑 용어를 몰라도 됩니다.
 
 ```
