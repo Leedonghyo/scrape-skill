@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "name": "quotes-scroll",
+  "source": "https://quotes.toscrape.com/scroll",
+  "strategy": "dom",
+  "pages": { "type": "scroll", "start": "https://quotes.toscrape.com/scroll", "max_rounds": 3, "idle_ms": 1500 },
+  "wait": { "selector": ".quote" },
+  "items": { "container": ".quote" },
+  "fields": {
+    "text": ".text",
+    "author": ".author"
+  },
+  "output": { "format": "csv" },
+  "notes": "Example: infinite scroll. Each scroll round loads 10 more quotes via XHR; quotes-http.json is the faster way to get the same data."
+}

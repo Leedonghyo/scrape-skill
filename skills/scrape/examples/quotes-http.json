@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "quotes-http",
+  "source": "https://quotes.toscrape.com/scroll",
+  "strategy": "http",
+  "pages": { "type": "param", "start_n": 1, "max_pages": 20, "stop_when_empty": true },
+  "http": { "url_template": "https://quotes.toscrape.com/api/quotes?page={n}", "method": "GET" },
+  "items": { "path": "quotes[]" },
+  "fields": {
+    "text": { "path": "text" },
+    "author": { "path": "author.name" },
+    "tags": { "path": "tags" }
+  },
+  "rate": { "delay_ms": 500, "jitter_ms": 200 },
+  "output": { "format": "csv" },
+  "notes": "Example: the JSON endpoint behind the infinite-scroll page. Page 11 returns an empty quotes array, which ends the run."
+}

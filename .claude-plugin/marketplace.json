@@ -1,0 +1,15 @@
+{
+  "name": "scrape-skill",
+  "owner": {
+    "name": "donghyo"
+  },
+  "description": "A Claude Code skill that turns 'collect X from this site' into a CSV, for people who do not know scraping.",
+  "plugins": [
+    {
+      "name": "scrape",
+      "source": "./",
+      "description": "Collect data from any website by describing what you want.",
+      "version": "0.1.0"
+    }
+  ]
+}

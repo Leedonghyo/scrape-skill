@@ -1,0 +1,21 @@
+{
+  "name": "scrape-skill-scripts",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Node scripts for the Claude Code `scrape` skill: run recipes, probe URLs, check the environment.",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "doctor": "node doctor.mjs",
+    "collect": "node collect.mjs",
+    "probe": "node probe-http.mjs",
+    "write-csv": "node write-csv.mjs",
+    "test": "node selftest.mjs",
+    "test:offline": "node selftest.mjs --offline"
+  },
+  "dependencies": {
+    "playwright-core": "1.63.0"
+  }
+}
