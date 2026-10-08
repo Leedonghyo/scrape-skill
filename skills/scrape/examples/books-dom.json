@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "name": "books-dom",
+  "source": "https://books.toscrape.com/",
+  "strategy": "dom",
+  "pages": {
+    "type": "next_link",
+    "start": "https://books.toscrape.com/catalogue/page-1.html",
+    "next_selector": "li.next a",
+    "max_pages": 5
+  },
+  "wait": {
+    "selector": "article.product_pod"
+  },
+  "items": {
+    "container": "article.product_pod"
+  },
+  "fields": {
+    "title": {
+      "selector": "h3 a",
+      "attr": "title"
+    },
+    "price": {
+      "selector": ".price_color",
+      "transform": "number"
+    },
+    "rating": {
+      "selector": "p.star-rating",
+      "attr": "class",
+      "regex": "star-rating (\\w+)",
+      "map": {
+        "One": 1,
+        "Two": 2,
+        "Three": 3,
+        "Four": 4,
+        "Five": 5
+      }
+    },
+    "url": {
+      "selector": "h3 a",
+      "attr": "href"
+    }
+  },
+  "rate": {
+    "delay_ms": 800,
+    "jitter_ms": 300
+  },
+  "output": {
+    "format": "csv",
+    "dedupe_key": "url"
+  },
+  "notes": "Example: list page with a classic next link. Static HTML, so dom is overkill but demonstrates the engine."
+}

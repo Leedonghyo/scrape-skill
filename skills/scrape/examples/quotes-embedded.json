@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "name": "quotes-embedded",
+  "source": "https://quotes.toscrape.com/js/",
+  "strategy": "embedded",
+  "pages": { "type": "param", "template": "https://quotes.toscrape.com/js/page/{n}/", "start_n": 1, "max_pages": 20 },
+  "embedded": { "source": { "regex": "var data = (\\[[\\s\\S]*?\\]);" } },
+  "items": { "path": "[]" },
+  "fields": {
+    "text": { "path": "text" },
+    "author": { "path": "author.name" }
+  },
+  "rate": { "delay_ms": 500, "jitter_ms": 200 },
+  "output": { "format": "csv" },
+  "notes": "Example: the page renders quotes client-side from an inline `var data = [...]` script, so plain HTTP + a regex capture is enough."
+}

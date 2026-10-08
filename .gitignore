@@ -1,0 +1,4 @@
+node_modules/
+skills/*-workspace/
+*.log
+.DS_Store
