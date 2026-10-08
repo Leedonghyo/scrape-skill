@@ -415,14 +415,34 @@
       .map((s) => s.textContent || '')
       .filter((t) => t.length > 2000 && !t.includes('window.__scrape') && /(window\.|var |let |const )\s*[\w$.]+\s*=\s*[\[{]/.test(t))
       .map((t) => cut((t.match(/(window\.|var |let |const )\s*([\w$.]+)\s*=/) || [])[0] || '', 60));
-    if (inline.length) out.inline_json_candidates = inline.slice(0, 6);
+    if (inline.length) {
+      out.inline_json_candidates = inline.slice(0, 6);
+      out.inline_json_hint = "read one with embeddedGet('window:NAME') (works for any global) or embeddedGet({ regex: 'var NAME = (\\\\[[\\\\s\\\\S]*?\\\\]);' })";
+    }
     return Object.keys(out).length ? out : { none: true };
   };
   // source: 'next' | 'window:__INITIAL_STATE__' | 'ldjson' ; path as in getPath. Returns a truncated JSON view.
+  // source: 'next' | 'ldjson' | 'window:NAME' (any global object, not only the known list) |
+  // { regex, flags } — group 1 of the match against the page HTML, parsed as JSON; the same meaning as
+  // lib.mjs extractEmbedded, so the `embedded` strategy's inline script assignment (`var NAME = …`) can be previewed here.
   S.embeddedGet = (source, path, opts = {}) => {
     const src = embeddedSources();
-    const root = src[source];
-    if (root === undefined) return { error: `no source ${source}`, available: Object.keys(src) };
+    let root = typeof source === 'string' ? src[source] : undefined;
+    if (root === undefined && typeof source === 'string' && source.startsWith('window:')) {
+      try { const v = window[source.slice(7)]; if (v && typeof v === 'object') root = v; } catch (e) { /* getter threw */ }
+    }
+    if (root === undefined && source && typeof source === 'object' && source.regex) {
+      // Scan the page's own HTML without the helpers.js copy that addScriptTag appended to <head>; that copy
+      // sits before the body and would be the first (decoy) match for a pattern like `var NAME = (…)`.
+      const own = [...document.querySelectorAll('script:not([src])')].filter((s) => (s.textContent || '').includes('window.__scrape'));
+      const haystack = own.reduce((h, s) => h.replace(s.outerHTML, ''), document.documentElement.outerHTML);
+      let m;
+      try { m = haystack.match(new RegExp(source.regex, source.flags || '')); } catch (e) { return { error: 'bad regex: ' + e.message }; }
+      if (!m) return { error: 'regex did not match the page HTML' };
+      const cap = m[1] !== undefined ? m[1] : m[0];
+      try { root = JSON.parse(cap); } catch (e) { return { error: 'regex capture is not valid JSON', capture_start: cut(cap, 120) }; }
+    }
+    if (root === undefined) return { error: `no source ${typeof source === 'string' ? source : JSON.stringify(source)}`, available: Object.keys(src), hint: "any global works as 'window:NAME'; for an inline script assignment use { regex: 'var NAME = (\\\\[[\\\\s\\\\S]*?\\\\]);' } with the real name" };
     const v = getPath(root, path || '');
     const json = JSON.stringify(v);
     return { path: path || '$', shape: shape(v, opts.depth || 2), json: json == null ? null : cut(json, opts.max || 3000), length: json ? json.length : 0 };
@@ -488,7 +508,9 @@
   };
   S.diagnose = () => {
     const title = norm(document.title);
-    const body = norm(document.body ? document.body.innerText : '').slice(0, 600);
+    const fullText = norm(document.body ? document.body.innerText : '');
+    const body = fullText.slice(0, 600);
+    const thin = fullText.length < 1500; // a page whose whole content is a wall/challenge, vs. a full page that merely contains a widget
     const has = (sel) => !!document.querySelector(sel);
     const d = { blocked: false, vendor: null, kind: null, signals: [], title, body_sample: cut(body, 200) };
     const add = (vendor, kind, sig) => {
@@ -501,8 +523,10 @@
     if (has('#challenge-form, #challenge-running, #cf-challenge-running, .cf-browser-verification')) add('cloudflare', 'js_challenge', 'cloudflare challenge dom');
     if (has('iframe[src*="challenges.cloudflare.com"], .cf-turnstile, [data-sitekey][class*="turnstile"]')) add('cloudflare', 'turnstile', 'turnstile widget');
     if (/error code:?\s*10\d\d|access denied.*cloudflare|cloudflare ray id/i.test(body)) add('cloudflare', 'access_denied', 'cloudflare error page');
-    if (has('iframe[src*="recaptcha"], .g-recaptcha, #recaptcha')) add(d.vendor || 'google', 'captcha', 'recaptcha widget');
-    if (has('iframe[src*="hcaptcha"], .h-captcha')) add(d.vendor || 'hcaptcha', 'captcha', 'hcaptcha widget');
+    // A reCAPTCHA/hCaptcha widget on an otherwise full page (op.gg ships a hidden one for its login form) is not a
+    // block. Only a thin page whose main content IS the captcha counts; otherwise just note that the widget exists.
+    if (has('iframe[src*="recaptcha"], .g-recaptcha, #recaptcha')) { if (thin) add(d.vendor || 'google', 'captcha', 'recaptcha widget'); else d.captcha_widget_present = true; }
+    if (has('iframe[src*="hcaptcha"], .h-captcha')) { if (thin) add(d.vendor || 'hcaptcha', 'captcha', 'hcaptcha widget'); else d.captcha_widget_present = true; }
     if (has('script[src*="datadome"], iframe[src*="captcha-delivery.com"], iframe[src*="geo.captcha-delivery"]')) add('datadome', has('iframe[src*="captcha-delivery"]') ? 'captcha' : 'js_challenge', 'datadome');
     if (has('script[src*="px-cloud"], script[src*="perimeterx"], #px-captcha, iframe[src*="px-cdn"]') || /press & hold|press and hold/i.test(body)) add('human', has('#px-captcha') ? 'captcha' : 'js_challenge', 'perimeterx/human');
     if (/_incapsula_resource|incapsula incident id|powered by incapsula/i.test(document.documentElement.innerHTML.slice(0, 20000) + body)) add('imperva', 'js_challenge', 'incapsula');
@@ -510,7 +534,9 @@
     if (/access denied|403 forbidden|forbidden|차단되었습니다|접근이 거부/i.test(title + ' ' + body) && body.length < 400) add(d.vendor || 'unknown', 'access_denied', 'short denied page');
     if (/too many requests|rate limit|429|잠시 후 다시|요청이 너무 많/i.test(title + ' ' + body) && body.length < 600) add(d.vendor || 'unknown', 'rate_limited', 'rate limit text');
     if (/pardon our interruption|unusual traffic|automated access|bot detected|robot/i.test(body) && body.length < 800) add(d.vendor || 'unknown', 'bot_page', 'bot interstitial text');
-    d.login_wall = has('input[type="password"]') && (body.length < 1500 || /sign in|log in|login|로그인/i.test(title));
+    // `body` is only the first 600 chars, so the old `body.length < 1500` was always true and any page with a
+    // password field counted as a login wall. Use the full text length, as the comment always intended.
+    d.login_wall = has('input[type="password"]') && (thin || /sign in|log in|login|로그인/i.test(title));
     d.paywall_hint = has('[class*="paywall"], [id*="paywall"], [class*="subscribe-wall"], [class*="premium-overlay"]') || /subscribe to continue|구독하고 계속|유료 회원|로그인 후 이용|구독자 전용/i.test(body);
     d.age_or_consent_gate = has('[class*="cookie"] button, #onetrust-banner-sdk, .cc-banner, [id*="consent"] button');
     d.text_length = (document.body ? document.body.innerText : '').length;

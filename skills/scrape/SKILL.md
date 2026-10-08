@@ -45,6 +45,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 5. 전략을 고릅니다. 싼 것부터:
    - `overview().api_hints`나 `browser_network_requests(filter: "api|json|graphql")`에 데이터를 담은 JSON 호출이 보이면 → `browser_network_request(index)`로 열어 URL 패턴과 헤더를 적고 `probe-http.mjs <url>`. 브라우저 없이 재현되면(200, `is_json`) → 전략 **`http`**.
    - `overview().embedded`에 `next`, `window:*`, `ldjson`으로 데이터가 있고(`embeddedGet(source, path)`로 확인) `probe-http.mjs <페이지 url>`이 차단되지 않으면 → 전략 **`embedded`**.
+   - `api_hints`가 비어 있으면 `dom`으로 가기 전에 두 가지를 먼저 합니다. (1) `await autoScroll({rounds: 2})` 또는 다음 페이지 링크를 한 번 클릭하고 `browser_network_requests`를 다시 봅니다. 서버 렌더 첫 페이지는 XHR이 없고 2페이지부터 API를 쓰는 사이트가 많습니다. (2) `probe-http.mjs <페이지 url>`의 `embedded.window_assignments`를 읽습니다. `/api/`, `?format=json` 같은 URL을 추측해서 치지는 않습니다.
    - 그 외 → **`dom`**. 사용자가 데이터를 볼 수 있으면 항상 됩니다.
 6. 필드를 매핑합니다.
    - `dom`: `overview().lists`에서 시작(가장 큰 반복 블록이 보통 데이터). 사용자가 말한 각 필드에 대해 `findByText("<화면에 보이는 예시값>")`이 정확한 요소와 `list.recipe_hint.container`, `field`를 줍니다. 각 셀렉터를 `probe(selector, { within: container })`로 확인: `count`가 항목 수와 같고 `distinct_texts`가 높아야 진짜 데이터입니다.
@@ -103,7 +104,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 1. **다른 문 찾기.** JSON 엔드포인트, RSS, 사이트맵, 모바일·AMP 버전이 챌린지 없이 같은 데이터를 주는 경우가 많습니다.
 2. **사람이 확인을 통과하게.** Playwright MCP 창은 사용자가 클릭할 수 있는 실제 Chrome입니다. 챌린지를 완료해 달라고 하고, 기다리고, `overview()` 재실행. 수집기가 통과한 세션을 물려받도록 쿠키를 내보냅니다.
-3. **사람처럼 행동.** `rate.delay_ms`를 올리고(3000+), `concurrency` 1 유지, 수집기를 `--headful --wait-for-human`으로 돌려 재확인 때 실패 대신 멈추게.
+3. **사람처럼 행동.** `rate.delay_ms`를 올리고(3000+), `concurrency` 1 유지, 수집기를 `--headful --wait-for-human`으로 돌려 재확인 때 실패 대신 멈추게. `--wait-for-human`은 `js_challenge`·`turnstile`·`captcha`·`login_required`에만 유효하고, `access_denied`·`rate_limited`는 사람이 클릭으로 통과할 수 없어 즉시 종료합니다(`collect.mjs`의 `SOLVABLE_BY_HUMAN`). **`diagnosis.kind`가 `access_denied`인데 MCP 창에서는 다음 페이지가 열리면 이 단계를 건너뛰고 바로 4단계로 갑니다.** 수집기 자체 브라우저의 속도를 늦춰도 Akamai가 그 브라우저에 대해 이미 내린 판정은 바뀌지 않습니다.
 4. **사용자의 실제 브라우저로 수집** (수집기 자체 브라우저에는 하드 차단 — 예: Akamai가 1페이지 이후 403 — 을 주지만 사람에게는 잘 열리는 사이트). 두 가지 방법:
    - **세션 안의 실제 브라우저**(가장 확실): 사용자가 실제로 보고 있는 브라우저를 모세요 — Claude in Chrome(`mcp__claude-in-chrome__*`, 로그인된 진짜 Chrome) 또는 Playwright MCP 창. 먼저 차단되던 페이지(예: 2페이지)가 거기서 실제로 열리는지 확인합니다. 그다음, 네비게이션마다 `window`가 날아가므로 페이지 안에 누적합니다: 이동 → `scripts/page/helpers.js` 주입 → `window.__scrape.collectInto(fields, container, { dedupe_key, reset: <첫 페이지만 true> })`, 사람 속도로 페이지별 반복. 마지막에 `window.__scrape.drain()`이 전체 행을 돌려줍니다. JSON 파일로 저장한 뒤 `node scripts/write-csv.mjs <그.json> --name <name> --dedupe-key <key>`를 돌리면 수집기와 같은 UTF-8 BOM CSV가 됩니다. 레시피의 `fields`/`container`를 그대로 써서 매핑은 변하지 않습니다.
    - **CDP로 수집기 연결**: 사용자가 자기 Chrome을 `--remote-debugging-port=9222`로(이미 열려 있지 않은 프로필로) 띄우면 `node collect.mjs <name> --cdp 9222`가 그 실제 세션을 몰고, 절대 닫지 않습니다. 새 Playwright 브라우저가 걸리는 일부 보호는 피하지만 강한 안티봇은 CDP도 탐지합니다. 그러면 위의 세션 안 브라우저로.
