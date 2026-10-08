@@ -10,6 +10,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { spawnSync } from 'node:child_process';
 import {
   SCRIPTS_DIR, HELPERS_PATH, SCRAPE_HOME, FORMATS,
   UsageError, EnvError, BlockedError,
@@ -32,6 +33,20 @@ const SOLVABLE_BY_HUMAN = new Set(['js_challenge', 'turnstile', 'captcha', 'logi
 // The stdout summary is read by the calling model. A detail-page body can run to thousands of characters,
 // which once made that one line 4.5KB and led a caller to re-run the whole collection just to capture it.
 const trimRow = (row) => Object.fromEntries(Object.entries(row || {}).map(([k, v]) => [k, typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '…' : v]));
+
+// Last-resort cleanup for the collector's OWN Chrome (never a --cdp browser, which is the user's): the profile
+// path is unique to this tool, so matching the command line on it only hits processes we launched. Used when
+// context.close() hangs (a navigation mid-flight during Ctrl-C) or on a second interrupt, so no window is left behind.
+function killOwnChrome() {
+  const profile = path.join(SCRAPE_HOME, 'profile');
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('powershell', ['-NoProfile', '-Command', `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*${profile.replace(/'/g, "''")}*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }`], { stdio: 'ignore', timeout: 8000 });
+    } else {
+      spawnSync('pkill', ['-f', profile], { stdio: 'ignore', timeout: 5000 });
+    }
+  } catch { /* best effort */ }
+}
 const HELPERS_SRC = fs.readFileSync(HELPERS_PATH, 'utf8');
 
 class Collector {
@@ -471,8 +486,10 @@ class Collector {
     // tearing it down — just drop the reference; the CDP socket closes when this process exits.
     if (cdp) { void browser; return; }
     if (!ctx) return;
-    try { await ctx.close(); } catch { /* already gone */ }
-    try { await ctx.browser()?.close(); } catch { /* persistent context has no separate browser, or already closed */ }
+    // close() can hang when a page is mid-navigation; bound it, then make sure the process is really gone.
+    try { await Promise.race([ctx.close(), sleep(8000)]); } catch { /* already gone */ }
+    try { await Promise.race([Promise.resolve(ctx.browser()?.close()), sleep(3000)]); } catch { /* no separate browser, or already closed */ }
+    killOwnChrome();
   }
 
   // ---------- summary ----------
@@ -531,12 +548,14 @@ async function main() {
   // signal asks the run loop (and the wait-for-human loop) to stop; if cleanup stalls, a second forces exit.
   let shuttingDown = false;
   const onSignal = async (sig) => {
-    if (shuttingDown) process.exit(130);
+    if (shuttingDown) { if (!c.cdp) killOwnChrome(); process.exit(130); } // second signal: still never leave Chrome behind
     shuttingDown = true;
     c.aborted = true;
     console.error(`[collect] ${sig} — closing browser and saving what was collected…`);
     try { c.flush(); if (c.cursor) c.saveState(c.cursor); } catch { /* best effort */ }
-    try { await c.close(); } catch { /* best effort */ }
+    // A navigation in flight can make close() stall; give it 5 s, then kill our own browser outright.
+    await Promise.race([c.close().catch(() => {}), sleep(5000)]);
+    if (!c.cdp) killOwnChrome();
     process.exit(130);
   };
   process.on('SIGINT', () => { onSignal('interrupted'); });
