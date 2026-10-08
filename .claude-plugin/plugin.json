@@ -1,6 +1,6 @@
 {
   "name": "scrape",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Collect data from any website by describing what you want. Analyzes the page in a real browser, confirms with sample rows and a screenshot, then collects to CSV/JSON with rate limiting and saved recipes. Explains bot checks, logins, paywalls and robots.txt in plain words and lets you decide.",
   "author": {
     "name": "Leedonghyo",
