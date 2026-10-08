@@ -554,7 +554,9 @@
       d.kind = d.kind || kind;
       d.signals.push(sig);
     };
-    if (/just a moment|attention required|checking your browser|verify you are human|사람인지 확인/i.test(title + ' ' + body)) add('cloudflare', 'js_challenge', 'cloudflare challenge text');
+    // Cloudflare localizes the interstitial: Korean pages say "잠시만 기다리십시오…" / "보안 확인 수행 중" and still print a Ray ID.
+    if (/just a moment|attention required|checking your browser|verify you are human|사람인지 확인|잠시만 기다리십시오|보안 확인 수행 중|보안 확인을 수행|performing a security check/i.test(title + ' ' + body)) add('cloudflare', 'js_challenge', 'cloudflare challenge text');
+    if (/\bray id\b\s*[:：]/i.test(body) && /cloudflare/i.test(body)) add('cloudflare', 'js_challenge', 'cloudflare ray id');
     if (has('#challenge-form, #challenge-running, #cf-challenge-running, .cf-browser-verification')) add('cloudflare', 'js_challenge', 'cloudflare challenge dom');
     if (has('iframe[src*="challenges.cloudflare.com"], .cf-turnstile, [data-sitekey][class*="turnstile"]')) add('cloudflare', 'turnstile', 'turnstile widget');
     if (/error code:?\s*10\d\d|access denied.*cloudflare|cloudflare ray id/i.test(body)) add('cloudflare', 'access_denied', 'cloudflare error page');
