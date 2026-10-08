@@ -106,6 +106,8 @@ node ~/.claude/skills/scrape/scripts/collect.mjs books-toscrape --headful --wait
 node ~/.claude/skills/scrape/scripts/collect.mjs books-toscrape --cdp 9222       # 내 Chrome(원격 디버깅 포트)에 붙어서 수집
 ```
 
+한 번에 하나만 돌리세요. 수집기는 Chrome 프로필 하나(`~/.scrape/profile`)를 쓰기 때문에 두 레시피를 동시에 실행하면 프로필 잠금에 걸립니다.
+
 플러그인으로 설치했다면 경로는 `~/.claude/plugins/cache/scrape-skill/scrape/<버전>/skills/scrape/scripts/`입니다.
 
 ## 테스트

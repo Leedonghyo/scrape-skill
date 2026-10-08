@@ -25,7 +25,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
   }
   ```
   `browser_run_code_unsafe`가 없거나 거부되면 helpers.js를 읽어 `browser_evaluate`에 `() => ( <파일 내용> )`로 넘기세요. 그 뒤로는 호출이 전부 짧습니다: `browser_evaluate  () => window.__scrape.overview()`.
-- **수집기** `node <skill-dir>/scripts/collect.mjs <recipe>` — 레시피를 여러 페이지에 걸쳐 속도 제한하며 실행하고 파일을 씁니다. Node 20 이상 필요. 머신에서 처음 쓸 때 `node <skill-dir>/scripts/doctor.mjs --fix`를 실행하세요(`playwright-core`를 scripts 폴더에 설치. 사용자의 Chrome을 쓰므로 브라우저 다운로드 없음).
+- **수집기** `node <skill-dir>/scripts/collect.mjs <recipe>` — 레시피를 여러 페이지에 걸쳐 속도 제한하며 실행하고 파일을 씁니다. Node 20 이상 필요. 머신에서 처음 쓸 때 `node <skill-dir>/scripts/doctor.mjs --fix`를 실행하세요(`playwright-core`를 scripts 폴더에 설치. 사용자의 Chrome을 쓰므로 브라우저 다운로드 없음). 한 번에 하나만 돌리세요. 수집기는 `~/.scrape/profile` 하나를 쓰므로 두 레시피를 동시에 돌리면 Chrome 프로필 잠금에 걸립니다.
 - **HTTP 프로브** `node <skill-dir>/scripts/probe-http.mjs <url>` — 이 URL이 브라우저 없이도 되는지 판정. 빠른 전략과 브라우저 중 어느 쪽인지 결정합니다.
 
 ## 흐름
@@ -59,7 +59,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 설명하지 말고 보여주세요:
 
 1. `extract(fields, container)` → 처음 5행을 사용자의 필드명으로 마크다운 표로.
-2. `highlight(fields, { container, limit: 4 })` → `browser_take_screenshot`(절대 경로 `filename`이 동작. 아니면 `.playwright-mcp/`에 저장됨) → 보여주기 → `clearHighlight()`.
+2. `highlight(fields, { container, limit: 4 })` → `browser_take_screenshot`(`filename`은 `.playwright-mcp/<이름>.png`처럼 작업 디렉토리 아래로만 지정. 그 밖의 경로는 "outside allowed roots"로 거부되니, 다른 곳이 필요하면 저장 후 복사) → 보여주기 → `clearHighlight()`. `browser_evaluate`·`browser_snapshot`의 `filename`도 같은 제한입니다.
 3. 질문 하나: "이게 원하시는 데이터가 맞나요? 빠진 게 있나요?" 사용자의 언어로. 규모 추정과 2페이지 검증 결과를 같은 메시지에 넣어 추가 턴이 없게 하세요.
 
 틀렸으면 **화면에 보이는 그대로의 예시값 하나**를 요청하세요("가격이 화면에 어떻게 보이나요? 예: 39,000원"). 그걸로 `findByText`를 돌려 필드를 고치고 다시 보여줍니다. 사용자에게 페이지 구조를 설명해 달라고 하지 마세요.
@@ -133,7 +133,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 | `pagination()` | 다음 링크, 페이지 파라미터, 경로 패턴, 무한 스크롤 추정 |
 | `apiHints()` | 지금까지 보인 XHR/fetch URL |
 | `diagnose()` | 봇 차단 벤더/종류, 로그인 벽, 유료 벽 신호 |
-| `await robots(path)` | 이 출처의 robots.txt 판정 |
+| `await robots(path)` | 이 출처의 robots.txt 판정. `crawl_delay`(초)가 있으면 그 값 × 1000을 `rate.delay_ms`의 하한으로 쓴다 |
 | `await autoScroll({rounds, container})` | 무한 스크롤 테스트. 스크롤 후 항목 수 |
 | `collectInto(fields, container, {dedupe_key, reset})` | 실제 브라우저 폴백: 이 페이지를 추출해 localStorage에 누적(네비게이션을 넘어 유지) |
 | `drain()` / `collectStatus()` | 모은 것 전부 반환+비움 / 지금까지 개수 |

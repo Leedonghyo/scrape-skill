@@ -13,7 +13,7 @@ import path from 'node:path';
 import {
   SCRIPTS_DIR, HELPERS_PATH, SCRAPE_HOME, FORMATS,
   UsageError, EnvError, BlockedError,
-  expandHome, sleep, isEmpty, hasAnyValue, shorten, jittered, parseArgs, loadRecipe,
+  expandHome, sleep, isEmpty, hasAnyValue, shorten, localDate, jittered, parseArgs, loadRecipe,
   defaultHeaders, mergeHeaders, loadStorageState, cookieHeader, detectBlockedHttp,
   jsonRows, extractEmbedded, writeRows, fillRate, unionColumns,
 } from './lib.mjs';
@@ -29,6 +29,9 @@ const HUMAN_WAIT_MS = 5 * 60_000;
 // Block kinds a person can actually clear by acting in the browser window. Everything else (access_denied,
 // rate_limited, bot_page) is a hard refusal that waiting cannot change.
 const SOLVABLE_BY_HUMAN = new Set(['js_challenge', 'turnstile', 'captcha', 'login_required']);
+// The stdout summary is read by the calling model. A detail-page body can run to thousands of characters,
+// which once made that one line 4.5KB and led a caller to re-run the whole collection just to capture it.
+const trimRow = (row) => Object.fromEntries(Object.entries(row || {}).map(([k, v]) => [k, typeof v === 'string' && v.length > 200 ? v.slice(0, 200) + '…' : v]));
 const HELPERS_SRC = fs.readFileSync(HELPERS_PATH, 'utf8');
 
 class Collector {
@@ -60,7 +63,7 @@ class Collector {
     const o = this.recipe.output || {};
     const name = this.recipe.name;
     let format = this.opts.format || o.format || 'csv';
-    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const date = localDate();
     let file = this.opts.out
       ? path.resolve(expandHome(this.opts.out))
       : expandHome((o.path || `~/Downloads/{name}-{date}.${format}`).replaceAll('{name}', name).replaceAll('{date}', date));
@@ -500,7 +503,7 @@ class Collector {
     }
     if (this.error) out.error = this.error;
     out.fill_rate = fillRate(this.rows, columns);
-    out.sample = this.rows.slice(0, this.dry ? 5 : 3);
+    out.sample = this.rows.slice(0, this.dry ? 5 : 3).map(trimRow);
     return out;
   }
 
@@ -508,7 +511,7 @@ class Collector {
     const columns = this.columns || unionColumns(this.recipe.fields, this.recipe.detail?.fields, this.rows);
     const fr = fillRate(this.rows, columns);
     console.error(`[collect] dry run: ${this.rows.length} rows from the first page; nothing written`);
-    for (const r of this.rows.slice(0, 5)) console.error('  ' + JSON.stringify(r));
+    for (const r of this.rows.slice(0, 5)) console.error('  ' + JSON.stringify(trimRow(r)));
     console.error('[collect] fill rate: ' + columns.map((c) => `${c} ${Math.round(fr[c] * 100)}%`).join(' | '));
   }
 }

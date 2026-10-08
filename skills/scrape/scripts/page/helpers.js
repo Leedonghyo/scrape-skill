@@ -2,10 +2,12 @@
  * scrape skill — in-page helpers. Injected into the target page and exposed as window.__scrape.
  * Everything returns plain JSON so the model can read it. Keep this file browser-only (no Node APIs).
  *
- * Install (Playwright MCP):  browser_run_code_unsafe
- *   async (page) => { await page.addInitScript({ path: '<skill>/scripts/page/helpers.js' });
- *                     await page.evaluate(require('fs').readFileSync('<skill>/scripts/page/helpers.js','utf8')); return 'ok' }
- * Fallback: paste this file's content into browser_evaluate as the function body.
+ * Install (Playwright MCP):  browser_run_code_unsafe — its sandbox has no `require`, so let Playwright read the file:
+ *   async (page) => { const p = '<skill>/scripts/page/helpers.js';
+ *                     await page.addInitScript({ path: p });                                        // every later navigation in this tab
+ *                     try { await page.addScriptTag({ path: p }); } catch (e) { await page.reload(); } // current page (strict CSP → reload)
+ *                     return await page.evaluate(() => typeof window.__scrape); }                   // "object"
+ * Fallback: paste this file's content into browser_evaluate as `() => ( <file content> )`.
  *
  * Then: browser_evaluate  () => window.__scrape.overview()
  */
@@ -433,7 +435,14 @@
     const next = document.querySelector('a[rel~="next"], link[rel~="next"]');
     if (next) res.rel_next = { href: next.getAttribute('href'), selector: next.tagName === 'A' ? cssPath(next) : 'link[rel=next]' };
     const NEXT_TXT = /^(next|next page|다음|다음 페이지|다음페이지|›|»|>|→|more|load more|show more|더보기|더 보기|see more|older|이전글)$/i;
-    const nextLike = qsa('a, button').filter((a) => NEXT_TXT.test(norm(a.textContent)) || /next|다음|more|더보기/i.test(a.getAttribute('aria-label') || ''));
+    // "Next →", "다음 ›", "» Next": decorative arrows around the word defeat a whole-string match, so test the
+    // text both as-is (arrow-only links) and with leading/trailing arrows stripped, and accept a leading "next".
+    const stripArrows = (t) => t.replace(/^[›»→←‹«<>\s]+/, '').replace(/[›»→←‹«<>\s]+$/, '');
+    const nextLike = qsa('a, button').filter((a) => {
+      const raw = norm(a.textContent);
+      const t = stripArrows(raw);
+      return NEXT_TXT.test(raw) || NEXT_TXT.test(t) || /^next\b/i.test(t) || /next|다음|more|더보기/i.test(a.getAttribute('aria-label') || '');
+    });
     if (nextLike.length) res.next_like = nextLike.slice(0, 3).map((a) => ({ text: cut(norm(a.textContent) || a.getAttribute('aria-label'), 30), selector: cssPath(a), href: a.getAttribute('href') }));
     const params = {};
     const pathPatterns = new Set();
@@ -447,7 +456,13 @@
       if (u.origin !== location.origin) continue;
       for (const [k, v] of u.searchParams) if (/^(page|p|pg|pageno|pagenum|page_no|pagenumber|offset|start|skip|cursor|pageindex|currentpage)$/i.test(k) && /^\d+$/.test(v)) (params[k] ||= new Set()).add(v);
       const m = u.pathname.match(/\/(page|p)[-\/_](\d+)|[-_](\d+)\.html?$/i);
-      if (m) pathPatterns.add(u.pathname.replace(/\d+/, '{n}'));
+      if (m) {
+        // Replace only the page number the regex matched, not the first digits in the path:
+        // /books/mystery_3/page-2.html must become .../mystery_3/page-{n}.html, not mystery_{n}/page-2.html.
+        const num = m[2] || m[3];
+        const at = m.index + m[0].lastIndexOf(num);
+        pathPatterns.add(u.pathname.slice(0, at) + '{n}' + u.pathname.slice(at + num.length));
+      }
     }
     if (Object.keys(params).length) res.page_params = Object.fromEntries(Object.entries(params).map(([k, v]) => [k, [...v].slice(0, 6)]));
     if (pathPatterns.size) res.path_patterns = [...pathPatterns].slice(0, 4);
@@ -528,7 +543,7 @@
       const toRe = (s) => new RegExp('^' + s.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\\\$$/, '$'));
       let best = null;
       for (const r2 of rules) if (toRe(r2.path).test(p) && (!best || r2.path.length > best.path.length)) best = r2;
-      return { fetched: true, path: p, disallowed: !!best && !best.allow, matched_rule: best, crawl_delay: star.map((g) => g.delay).find(Boolean) || null, sitemaps: (txt.match(/^sitemap:\s*(\S+)/gim) || []).map((l) => l.split(/:\s*/)[1]).slice(0, 5), total_disallow_rules: rules.filter((r2) => !r2.allow).length };
+      return { fetched: true, path: p, disallowed: !!best && !best.allow, matched_rule: best, crawl_delay: star.map((g) => g.delay).find(Boolean) || null, sitemaps: (txt.match(/^sitemap:\s*(\S+)/gim) || []).map((l) => l.replace(/^sitemap:\s*/i, '').trim()).slice(0, 5), total_disallow_rules: rules.filter((r2) => !r2.allow).length };
     } catch (e) {
       return { fetched: false, error: String(e), disallowed: false };
     }
@@ -601,20 +616,32 @@
         l.textContent = label;
         l.style.cssText = `position:absolute;left:-2px;top:-16px;background:${color};color:#fff;padding:1px 4px;border-radius:2px;white-space:nowrap;`;
         b.appendChild(l);
+        b._label = l;
       }
       overlay.appendChild(b);
-      return true;
+      return b;
     };
     const counts = {};
     const names = Object.keys(fields || {});
     scopes.forEach((sc, i) => {
       if (sc !== document) box(sc, '#64748b', i === 0 ? (opts.container_label || 'item') : '', true);
+      const labelled = new Map(); // element → its label span, so two fields on one element read "제목·링크" instead of overlapping
       names.forEach((name, j) => {
         const raw = fields[name];
         const sel = typeof raw === 'string' ? raw : raw.selector;
-        const el = !sel || sel === ':scope' ? (sc === document ? null : sc) : resolve(sel, sc)[0];
-        if (el && box(el, COLORS[j % COLORS.length], i === 0 ? name : '')) counts[name] = (counts[name] || 0) + 1;
-        else counts[name] = counts[name] || 0;
+        const matched = !sel || sel === ':scope' ? (sc === document ? [] : [sc]) : resolve(sel, sc);
+        const targets = raw && typeof raw === 'object' && raw.all ? matched : matched.slice(0, 1); // all:true → box every match, label the first
+        let hit = false;
+        targets.forEach((el, k) => {
+          const label = i === 0 && k === 0 ? name : '';
+          const prev = label ? labelled.get(el) : null;
+          const b = box(el, COLORS[j % COLORS.length], prev ? '' : label);
+          if (!b) return;
+          hit = true;
+          if (prev) prev.textContent += '·' + name;
+          else if (b._label) labelled.set(el, b._label);
+        });
+        counts[name] = (counts[name] || 0) + (hit ? 1 : 0);
       });
     });
     return { containers: scopes.length, fields: counts, note: 'take a screenshot now, then call clearHighlight()' };

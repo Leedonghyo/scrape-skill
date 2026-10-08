@@ -15,7 +15,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { expandHome, FORMATS, parseArgs, writeRows, unionColumns, fillRate, UsageError } from './lib.mjs';
+import { expandHome, FORMATS, localDate, parseArgs, writeRows, unionColumns, fillRate, UsageError } from './lib.mjs';
 
 const USAGE = 'usage: node write-csv.mjs <rows.json | -> [--out PATH] [--format csv|json|jsonl] [--name NAME] [--dedupe-key KEY] [--columns a,b,c]';
 const SPEC = { out: 'string', format: 'string', name: 'string', 'dedupe-key': 'string', columns: 'string', help: 'boolean' };
@@ -43,9 +43,17 @@ function main() {
   if (!FORMATS.includes(format)) { console.error(`[write-csv] --format must be one of ${FORMATS.join(', ')}`); return 1; }
   const columns = opts.columns ? opts.columns.split(',').map((s) => s.trim()).filter(Boolean) : unionColumns(rows);
   const name = opts.name || 'scrape';
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  const date = localDate();
   const ext = format === 'csv' ? 'csv' : format === 'jsonl' ? 'jsonl' : 'json';
-  const out = path.resolve(expandHome(opts.out || `~/Downloads/${name}-${date}.${ext}`));
+  let out = path.resolve(expandHome(opts.out || `~/Downloads/${name}-${date}.${ext}`));
+  if (!opts.out && fs.existsSync(out)) {
+    // collect.mjs writes <name>-<date>.<ext> into the same folder; never silently overwrite its file.
+    const base = out.slice(0, -(ext.length + 1));
+    let n = 2;
+    while (fs.existsSync(`${base}-${n}.${ext}`)) n++;
+    console.error(`[write-csv] ${out} already exists; writing to ${base}-${n}.${ext} instead`);
+    out = `${base}-${n}.${ext}`;
+  }
 
   try { writeRows({ file: out, format, rows, columns, append: false }); }
   catch (e) { console.error(`[write-csv] cannot write ${out}: ${e.message}`); return 1; }
