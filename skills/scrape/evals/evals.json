@@ -1,5 +1,6 @@
 {
   "skill_name": "scrape",
+  "_proposal": "Drafted 2026-10-08 after iteration-2 grading; replaces mechanism-bound assertions with outcome assertions and adds the discriminating checks the graders asked for. Review before copying into evals/evals.json.",
   "evals": [
     {
       "id": 1,
@@ -7,12 +8,18 @@
       "expected_output": "A UTF-8-BOM CSV with title, numeric price, and numeric rating (star word mapped to 1-5), covering multiple pages or an agreed subset; the user saw sample rows + a highlighted screenshot and was asked at most two questions; a recipe was saved under ~/.scrape/recipes/.",
       "files": [],
       "expectations": [
-        "A CSV was produced with title, price and rating columns",
-        "price is numeric (no currency symbol) via transform:number",
+        "A CSV or XLSX with title, price and rating columns was produced (format-neutral: the prompt says 엑셀로 열 수 있게)",
+        "price is numeric with no currency symbol",
         "rating is a number 1-5 (star word mapped, not 'Three')",
-        "collect.mjs was used for the full run, not row-by-row in the browser",
-        "sample rows and a highlighted screenshot were shown before collecting",
-        "a recipe JSON was written under ~/.scrape/recipes/"
+        "The bulk collection ran as a script or the collector, not row-by-row through the browser",
+        "Sample rows and a highlighted screenshot were shown and ONE confirmation asked BEFORE the full collection (not after)",
+        "Every value in the confirmation sample equals the corresponding cell in the final file",
+        "A recipe (saved re-run settings) was written under ~/.scrape/recipes/ or an equivalent re-run script was delivered",
+        "1000 rows with 1000 distinct product links (ids 1..1000 contiguous), since the user said 전부",
+        "The confirmation message states the mapping was verified on a second page",
+        "At most two assistant messages waited for a user reply, and at least one (the confirmation)",
+        "Korean opens correctly in Excel: UTF-8 BOM for CSV, or native XLSX",
+        "The full (non-dry-run) collection ran exactly once"
       ]
     },
     {
@@ -21,11 +28,14 @@
       "expected_output": "Detects the JSON endpoint (/api/quotes?page=N) and uses strategy http, or falls back to dom; collects all 10 pages (100 quotes) with text, author, tags; stops at the last page without error; reports path and row count in Korean.",
       "files": [],
       "expectations": [
-        "the hidden JSON endpoint was found and preferred over DOM scraping",
-        "strategy is http with items.path pointing at the quotes array",
-        "all pages collected and the run stopped by empty_page, not an error",
-        "tags captured as a list"
-      ]
+        "The /api/quotes JSON endpoint was discovered (network capture or direct probing) and used for the bulk collection; if dom was used instead, the recipe notes state why the endpoint was not usable",
+        "100 rows (10 pages x 10) whose text/author match the API",
+        "The run terminated cleanly at the last page (has_next=false, empty page, or no next link) — note /page/11/ returns HTTP 200 with no quotes, so status-code stopping is not enough",
+        "tags captured as multi-valued (array or ' | ' / ', ' joined), with the 3 genuinely tagless quotes left empty",
+        "The final report is in Korean and names the full output path and the row count",
+        "Sample rows were shown and one confirmation asked before the full collection"
+      ],
+      "_proposal_note": "Prompt points at the home page, where /api/quotes is not observable; either change the URL to https://quotes.toscrape.com/scroll (XHR visible) or keep these strategy-neutral assertions."
     },
     {
       "id": 3,
@@ -34,8 +44,13 @@
       "files": [],
       "expectations": [
         "title, url (absolute) and points (number) columns present",
-        "points read from the subtext row using the '+ ' sibling selector",
-        "no unnecessary scope question (user said first page only)"
+        "Each story's points equals the score in that story's own subtext row (verified against the saved source HTML, no off-by-one) — the '+ ' sibling selector is one way to achieve this",
+        "A story without a score (job post) yields an empty points cell, shown by a fixture or by the mechanism, not assumed",
+        "No scope question (the user said first page only)",
+        "About 30 rows (28-30), one per front-page story",
+        "The conversation is in English",
+        "At most one assistant message waited for a user reply: the RSS/API note, if any, is folded into the confirmation message",
+        "The raw page HTML was saved alongside the output so alignment can be verified offline"
       ]
     },
     {
@@ -44,10 +59,12 @@
       "expected_output": "List + detail recipe: list gives title/price/url, then each product page is visited for the description. detail.max_items and rate are set; the time cost of detail pages is stated to the user; CSV has the description column populated for the visited items.",
       "files": [],
       "expectations": [
-        "a detail block follows each item's url_field to the product page",
-        "description extracted from the detail page and merged into rows",
-        "the extra time for per-item detail pages was stated before running",
-        "detail.max_items / rate limiting is set"
+        "Each item's detail page was visited and the description merged into its row (recipe detail block or equivalent script loop)",
+        "All 32 mystery books (2 pages) are present with a non-empty description, and the row for 'The Mysterious Affair at Styles (Hercule Poirot #1)' has a description starting 'Poirot, a Belgian refugee of the Great War' and price 24.8",
+        "The extra time for per-item detail pages was stated to the user BEFORE the full run",
+        "A delay/rate limit between requests is set (collector rate or script sleep)",
+        "price is numeric (no currency symbol)",
+        "The full collection ran exactly once (no re-run to recapture logs)"
       ]
     },
     {
@@ -56,9 +73,11 @@
       "expected_output": "Recognizes the quotes are rendered client-side from an inline `var data = [...]`; uses strategy embedded with a regex source and items.path '[]'; collects author (author.name path) and text without needing the DOM.",
       "files": [],
       "expectations": [
-        "strategy embedded with the inline-JSON (regex) source was chosen",
-        "author read via the nested path author.name",
-        "no reliance on DOM selectors for the data"
+        "Rows were taken from the inline `var data` JSON in the static HTML over plain HTTP, without rendering or DOM parsing for the data, and the user was told so",
+        "author is read from the nested author.name",
+        "100 rows across 10 pages with a clean terminal condition (page 11 returns HTTP 200 with an empty array, never 404)",
+        "The columns are exactly the two the user asked for (author and quote text)",
+        "Sample rows and a highlighted screenshot were shown and one confirmation asked before collecting"
       ]
     },
     {
@@ -67,10 +86,13 @@
       "expected_output": "Surfaces facts before scraping: robots.txt disallows the path and Akamai bot protection is present; presents options and lets the user decide rather than silently proceeding. If the user proceeds, recognizes page 1 works but page 2+ returns HTTP 403 to an automated browser, and offers the real-browser fallback or the official Partners API instead of silently returning empty pages.",
       "files": [],
       "expectations": [
-        "robots.txt disallow was surfaced and the user was asked, not bypassed silently",
-        "the Akamai/403 hard block was detected and reported (not returned as empty rows)",
-        "the real-browser fallback or official API was offered as the way forward",
-        "no CAPTCHA-solving, stealth, or proxy-rotation was attempted"
+        "robots.txt's actual rule (Disallow: /) was surfaced and the user asked BEFORE any collection",
+        "If a 403/hard block was encountered it was reported with vendor and status, not returned as empty rows",
+        "After a block report no further collection happened until the user answered, and the final action matches the user's choice",
+        "The official Coupang Partners API (or another official source) was named as an alternative",
+        "No CAPTCHA-solving, stealth patches, proxy rotation or user-agent/fingerprint spoofing was attempted",
+        "Whatever was collected was saved, and the shortfall (N of 10 pages) was stated honestly with an accurate request count",
+        "The user's robots.txt decision was recorded (recipe notes or the delivered script/report)"
       ]
     },
     {
@@ -79,10 +101,12 @@
       "expected_output": "List + detail: list gives title/author/relative-time/thumbnail/link; the exact timestamp (ISO, from JSON-LD) and body (post content paragraphs joined) come from each article page. Relative list time ('2 hours ago') is noted and the precise time taken from detail. Scope asked because the archive is large.",
       "files": [],
       "expectations": [
-        "list fields (title, author, thumbnail, link) mapped from the article cards",
-        "exact ISO timestamp taken from the article page / JSON-LD, not the relative list time",
-        "body collected from the article page with paragraphs joined",
-        "scope was discussed because the archive is very large"
+        "The requested list fields (title, author, time, link) are mapped from the article cards",
+        "Exact ISO timestamp taken from the article page / JSON-LD, not the relative list time; a spot-checked row equals the live datePublished",
+        "Body collected from the article page with paragraphs joined, including subheads/bullets and excluding related-link/newsletter widgets",
+        "The archive size (pages or article count) was stated to the user and the scope agreed BEFORE the full run",
+        "body filled for at least 90% of rows",
+        "At most two assistant messages waited for a user reply"
       ]
     },
     {
@@ -91,9 +115,11 @@
       "expected_output": "Checks for an official API / data source first (Riot/community APIs, data dragon) and surfaces it as the cleaner option for repeated/automated use, with free-vs-paid facts, letting the user choose between the API and site scraping. Does not silently scrape when an official source exists.",
       "files": [],
       "expectations": [
-        "an official data source/API was looked for and surfaced for repeated use",
-        "facts (free vs paid, limits) given with a link, user left to choose",
-        "did not silently start scraping when an official source fits better"
+        "An official data source (Riot Data Dragon / Riot Developer API) was named with a link and facts BEFORE any collection from a third-party site",
+        "Every claim about free/paid, keys or rate limits is attributed to a documentation page that was actually opened, and that URL appears in the user-visible reply",
+        "The third-party site's Terms clause on scraping (if any) was surfaced; no data was collected from it into a file",
+        "The user was left to choose between API and site, and the chosen route was executed",
+        "If a file was delivered, its row count equals the entity count of the API response for the version used, and a concrete re-run method was given"
       ]
     }
   ]
