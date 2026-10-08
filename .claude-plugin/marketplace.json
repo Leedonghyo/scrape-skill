@@ -1,7 +1,8 @@
 {
   "name": "scrape-skill",
   "owner": {
-    "name": "donghyo"
+    "name": "Leedonghyo",
+    "url": "https://github.com/Leedonghyo"
   },
   "description": "A Claude Code skill that turns 'collect X from this site' into a CSV, for people who do not know scraping.",
   "plugins": [

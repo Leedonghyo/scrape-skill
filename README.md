@@ -24,33 +24,47 @@ It does **not** solve CAPTCHAs, hide automation, or rotate proxies. Those are th
 
 ## Install
 
-Requirements: [Claude Code](https://claude.com/claude-code), Node.js 20+, Google Chrome (or Edge).
+Requirements: [Claude Code](https://claude.com/claude-code) (CLI or desktop app), Node.js 20+, Google Chrome (or Edge). Works in Claude Code and the Claude desktop app; not in claude.ai on the web, and not with other LLM clients.
 
-1. Add the Playwright MCP server (a real Chrome window Claude can drive). Either the official plugin:
-   ```bash
-   claude plugin install playwright
-   ```
-   or as a plain MCP server:
-   ```bash
-   claude mcp add --scope user playwright -- npx @playwright/mcp@latest
-   ```
-2. Install the skill. As a plugin from this repo:
-   ```bash
-   claude plugin marketplace add <owner>/scrape-skill
-   claude plugin install scrape
-   ```
-   or copy the folder into your personal skills directory:
-   ```bash
-   git clone https://github.com/<owner>/scrape-skill
-   cp -r scrape-skill/skills/scrape ~/.claude/skills/scrape
-   ```
-3. One-time setup of the collector (installs `playwright-core` into the skill folder; no browser download, it uses your Chrome). Ask Claude to run it, or:
-   ```bash
-   node ~/.claude/skills/scrape/scripts/doctor.mjs --fix
-   ```
-   (For the plugin install the path is printed by `claude plugin list`.)
+Paste these three commands, then restart Claude Code:
 
-Then just ask Claude for data from a site. The skill triggers on phrases like "collect", "scrape", "crawl", "모아줘", "수집해줘", "긁어줘".
+```bash
+claude plugin install playwright
+claude plugin marketplace add Leedonghyo/scrape-skill
+claude plugin install scrape
+```
+
+That is the whole setup. The first command adds the browser Claude drives (a real Chrome window you can see and click in); the next two install this skill. The collector's one Node dependency (`playwright-core`, no browser download) is installed automatically the first time you ask for data — Claude runs `scripts/doctor.mjs --fix` for you.
+
+Then just ask for data from a site: "collect the titles and prices from https://…", "이 사이트에서 상품명이랑 가격 모아줘". The skill triggers on words like collect, scrape, crawl, 모아줘, 수집해줘, 긁어줘.
+
+<details>
+<summary>한국어 빠른 설치</summary>
+
+Claude Code(터미널 또는 데스크톱 앱), Node.js 20 이상, Chrome이 있으면 됩니다. 아래 세 줄을 붙여넣고 Claude Code를 재시작하세요.
+
+```bash
+claude plugin install playwright
+claude plugin marketplace add Leedonghyo/scrape-skill
+claude plugin install scrape
+```
+
+그다음 "이 사이트에서 ○○ 모아줘"라고 말하면 됩니다. 수집기에 필요한 Node 패키지는 처음 요청할 때 Claude가 알아서 설치합니다. claude.ai 웹이나 다른 LLM에서는 동작하지 않습니다.
+
+</details>
+
+<details>
+<summary>Alternative: copy the folder instead of installing the plugin</summary>
+
+```bash
+git clone https://github.com/Leedonghyo/scrape-skill
+cp -r scrape-skill/skills/scrape ~/.claude/skills/scrape
+node ~/.claude/skills/scrape/scripts/doctor.mjs --fix
+```
+
+You still need the Playwright browser: `claude plugin install playwright`, or `claude mcp add --scope user playwright -- npx @playwright/mcp@latest`.
+
+</details>
 
 ## Layout
 
