@@ -42,7 +42,7 @@ Keep recipes boring and explicit. A recipe the model can read back and explain i
 | `rate` | no | `{ "delay_ms": 1500, "jitter_ms": 500, "concurrency": 1 }` (defaults shown). The pause happens before every request, detail pages included. `concurrency` > 1 only for `http` with `param`/`urls` |
 | `http` | `http` only | `{ "url_template": "...{n}...", "method": "GET", "headers": {...}, "body": null }`. `url_template` is where `{n}` goes; `pages` then only carries `type: "param"`, `start_n`, `max_pages` |
 | `embedded` | `embedded` only | `{ "source": "next" \| "ldjson" \| "window:NAME" \| { "regex": "...", "flags": "" } }` — see "Embedded sources" |
-| `output` | no | `{ "format": "csv" \| "json" \| "jsonl", "path": "~/Downloads/{name}-{date}.csv", "dedupe_key": "url" }`. A `--out` path with `.json`/`.jsonl`/`.csv` sets the format by extension |
+| `output` | no | `{ "format": "csv" \| "json" \| "jsonl", "path": "~/Downloads/{name}-{date}.csv", "dedupe_key": "url" }`. A `--out` path with `.json`/`.jsonl`/`.csv` sets the format by extension. `{date}` is the local calendar date (YYYYMMDD), not UTC |
 | `notes` | no | free text: why this strategy, what to watch for, decisions the user made (robots.txt etc.) |
 
 When the collector stops on a block or login it writes `blocked_by: { vendor, kind, url }` to `~/.scrape/state/<name>.json` and to the summary line, never into the recipe.
@@ -57,7 +57,7 @@ When the collector stops on a block or login it writes `blocked_by: { vendor, ki
 | `next_link` | `start`, `next_selector`, `max_pages` | `dom` only; follows (or clicks, when it is a button) the next element until it disappears |
 | `scroll` | `start`, `max_rounds` (default 20), `idle_ms` (default 1500), `load_more_selector` (optional) | `dom` only; scrolls to the bottom (or clicks "load more") until the item count stops growing (`stopped_reason: scroll_idle`). `--max-pages` overrides `max_rounds`; `pages_done` reports rounds |
 
-Every type stops on an empty page (`stop_when_empty`, default true). "Empty" means zero rows after dedupe (`stopped_reason: empty_page` or `all_duplicates`). For `param`, an HTTP 404/410 counts as empty so numbered pagination ends cleanly; other non-2xx statuses are errors. `max_pages` defaults to 20 so a first run never surprises anyone.
+Every type stops on an empty page (`stop_when_empty`, default true). "Empty" means zero rows after dedupe (`stopped_reason: empty_page` or `all_duplicates`). For `param`, an HTTP 404/410 counts as empty so numbered pagination ends cleanly; other non-2xx statuses are errors. `max_pages` defaults to 20 so a first run never surprises anyone. The CLI flag `--max-pages N` overrides the recipe's `max_pages` for that run.
 
 ## `items`
 
@@ -66,7 +66,7 @@ Every type stops on an empty page (`stop_when_empty`, default true). "Empty" mea
 
 ## `fields`
 
-A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` for `http`/`embedded` (`selector` is accepted as an alias of `path` there).
+A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` for `http`/`embedded` (`selector` is accepted as an alias of `path` there). Field names may be in the user's language (`제목`, `가격`); they become the CSV header verbatim, in recipe order.
 
 | key | strategy | meaning |
 |---|---|---|

@@ -26,6 +26,9 @@ export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const isEmpty = (v) => v == null || v === '' || (Array.isArray(v) && v.length === 0);
 export const hasAnyValue = (row) => Object.values(row || {}).some((v) => !isEmpty(v));
 export const shorten = (s, n = 80) => (s && s.length > n ? s.slice(0, n) + '…' : s);
+// Local calendar date as YYYYMMDD for file names. toISOString() is UTC, which is still "yesterday"
+// before 09:00 KST and produced coupang-498919-20261007.csv at 08:41 on the 8th.
+export const localDate = (d = new Date()) => `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
 export const tryParse = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
 
 // Random delay around rate.delay_ms so request timing does not look like a metronome.
