@@ -31,6 +31,10 @@ Small job, no question:
 - ko: "이 사이트는 공식 API가 있어요. 문서 기준으로 월 1,000건까지 무료, 그 이상은 유료입니다 (링크). API를 쓰면 더 정확하고 차단 걱정이 없고, 사이트에서 바로 수집하면 가입 없이 지금 받을 수 있어요. 어느 쪽으로 할까요? 저는 한 번만 받으실 거면 사이트 수집, 계속 쓰실 거면 API를 권해요."
 - en: "This site has an official API. According to the docs it's free up to 1,000 calls/month, paid beyond (link). The API is more accurate and never blocked; collecting from the site works right now without signing up. Which do you prefer? For a one-off I'd collect from the site; for something you'll repeat, the API."
 
+No key, no pricing page (RSS, a public JSON feed, an open data portal) — fold it into the confirmation message as one line, no question:
+- ko: "참고로 이 사이트는 공식 데이터 제공처가 있어요(링크). 가입이나 키 없이 바로 쓸 수 있고 요금 안내는 없습니다. 반복해서 받으실 거면 그쪽이 안정적이고, 지금은 요청하신 대로 사이트에서 받겠습니다."
+- en: "Note: this site also offers an official data source (link) — no sign-up or key, no pricing listed. For repeated collection it's the more stable route; for now I'll collect from the site as you asked."
+
 ### Login required
 - ko: "이 페이지는 로그인이 필요해요. 열려 있는 Chrome 창에서 로그인해주시면 이어서 진행할게요. 비밀번호는 제가 다루지 않아요."
 - en: "This page needs a login. Please sign in in the open Chrome window and tell me when you're done. I don't handle passwords."
@@ -42,6 +46,10 @@ Small job, no question:
 ### robots.txt disallows
 - ko: "이 사이트는 robots.txt에서 이 경로의 자동 수집을 원하지 않는다고 표시해두었어요. 법적 금지는 아니지만 사이트의 명시적인 요청이에요. 그래도 진행할까요? 기본은 존중하는 쪽입니다."
 - en: "This site's robots.txt marks this path as not for automated collection. It isn't a law, but it is the site's explicit request. Proceed anyway? My default is to respect it."
+
+### Terms of service forbid scraping (separate from robots.txt)
+- ko: "이 사이트 이용약관은 자동 수집을 금지하고 있어요(링크). robots.txt와 별개의 명시적 금지라서, 그래도 진행할지는 직접 정하셔야 해요. 기본은 존중하는 쪽입니다. 참고로 이 사이트가 다른 회사 데이터를 재가공한 것이라면 원 발행자의 개발자 포털이 공식 경로입니다."
+- en: "This site's terms of service forbid automated collection (link). That's an explicit ban separate from robots.txt, so proceeding is your call; my default is to respect it. If the site repackages another company's data, that company's developer portal is the official route."
 
 ### Bot check the user can pass
 - ko: "사이트가 사람인지 확인을 요구하고 있어요 (Cloudflare). Chrome 창에서 확인 버튼을 눌러주시면 이어서 할게요."
