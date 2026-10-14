@@ -39,8 +39,8 @@ Keep recipes boring and explicit. A recipe the model can read back and explain i
 | `detail` | no | follow a per-row link and extract more columns from the detail page |
 | `wait` | no | `dom`/`intercept` only: `{ "selector": css, "timeout_ms": 15000 }` or `{ "network_idle": true }`. A timeout does not abort: the collector logs it, re-checks for a block, and extracts what is there |
 | `session` | no | `{ "cookies_file": "~/.scrape/sessions/<name>.json", "headers": {...} }` |
-| `rate` | no | `{ "delay_ms": 1500, "jitter_ms": 500, "concurrency": 1 }` (defaults shown). The pause happens before every request, detail pages included. `concurrency` > 1 only for `http` with `param`/`urls` |
-| `http` | `http` only | `{ "url_template": "...{n}...", "method": "GET", "headers": {...}, "body": null }`. `url_template` is where `{n}` goes; `pages` then only carries `type: "param"`, `start_n`, `max_pages` |
+| `rate` | no | `{ "delay_ms": 1500, "jitter_ms": 500, "concurrency": 1 }` (defaults shown). The pause happens before every request, detail pages included. `concurrency` > 1 only for `http` with `param`/`urls`; it is ignored (always 1) for `cursor` and for `intercept` |
+| `http` | `http` only | `{ "url_template": "...{n}...", "method": "GET", "headers": {...}, "body": null }`. `url_template` is where `{n}` goes; `pages` then only carries `type: "param"`, `start_n`, `max_pages`. With `pages.type: "cursor"` the placeholder is `{cursor}`. Both placeholders also work inside `body` (object or string) |
 | `intercept` | `intercept` only | `{ "url_match": "/api/search", "method": "GET", "timeout_ms": 10000 }`. `url_match` is a regex tested against each response URL; `method` (optional) narrows it; only JSON content-types count. `timeout_ms` (default 10000) is how long each page gets to make the call — see "Intercept" |
 | `embedded` | `embedded` only | `{ "source": "next" \| "ldjson" \| "window:NAME" \| { "regex": "...", "flags": "" } }` — see "Embedded sources" |
 | `output` | no | `{ "format": "csv" \| "json" \| "jsonl", "path": "~/Downloads/{name}-{date}.csv", "dedupe_key": "url" }`. A `--out` path with `.json`/`.jsonl`/`.csv` sets the format by extension. `{date}` is the local calendar date (YYYYMMDD), not UTC |
@@ -57,8 +57,25 @@ When the collector stops on a block or login it writes `blocked_by: { vendor, ki
 | `param` | `template` with `{n}` (dom/embedded; for `http` use `http.url_template`), `start_n` (default 1), `step` (default 1), `max_pages` | `https://site/list?page={n}` or `https://site/catalogue/page-{n}.html` |
 | `next_link` | `start`, `next_selector`, `max_pages` | `dom`/`intercept` only; follows (or clicks, when it is a button) the next element until it disappears |
 | `scroll` | `start`, `max_rounds` (default 20), `idle_ms` (default 1500), `load_more_selector` (optional) | `dom`/`intercept` only; scrolls to the bottom (or clicks "load more") until the item count (for `intercept`: the number of captured responses) stops growing (`stopped_reason: scroll_idle`). `--max-pages` overrides `max_rounds`; `pages_done` reports rounds |
+| `cursor` | `cursor_path`, `start_cursor` (default empty), `max_pages` | `http`/`intercept` only; see "Cursor pagination" |
 
 Every type stops on an empty page (`stop_when_empty`, default true). "Empty" means zero rows after dedupe (`stopped_reason: empty_page` or `all_duplicates`). For `param`, an HTTP 404/410 counts as empty so numbered pagination ends cleanly; other non-2xx statuses are errors. `max_pages` defaults to 20 so a first run never surprises anyone. The CLI flag `--max-pages N` overrides the recipe's `max_pages` for that run.
+
+### Cursor pagination
+
+For APIs that return "where to continue" instead of accepting a page number (`next_cursor`, `after`, `pageInfo.endCursor`, `continuation`).
+
+```json
+"strategy": "http",
+"pages": { "type": "cursor", "cursor_path": "meta.next_cursor", "max_pages": 50 },
+"http": { "url_template": "https://site/api/feed?limit=20&cursor={cursor}" }
+```
+
+- `cursor_path` is where each response carries the next cursor, in the same path grammar as `items.path`. A path with `[]` (`data.posts.edges[].cursor`) takes the last item's value.
+- `http`: `{cursor}` goes in `http.url_template` or anywhere inside `http.body`. The first request uses `start_cursor`; when that is empty the whole query parameter is removed from the URL (`?limit=20`), and a body value that is exactly `"{cursor}"` becomes `null`.
+- `intercept`: needs `start`; `idle_ms` and `load_more_selector` work as for `scroll`. The browser pages by itself (scrolling, or clicking `load_more_selector`), so nothing is substituted; `cursor_path` is only read from each captured response to notice the end. `intercept.url_match` must match the list call only.
+- The run ends with `stopped_reason: cursor_end` when the cursor is missing, null, empty or equal to the one just sent. Reaching `max_pages` first is reported as `max_pages`, as for every other type, so the caller can tell "finished" from "cut off". An empty page with a live cursor still stops as `empty_page` unless `stop_when_empty` is false.
+- Requests are strictly sequential. `--resume` continues from the last cursor (`cursor.value` in `~/.scrape/state/<name>.json`) for `http`; an `intercept` run cannot resume mid-list because the page owns the cursor. Cursors often expire within minutes to hours, so a resume that returns an error or the first page again means: start over.
 
 ## `items`
 

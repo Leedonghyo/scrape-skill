@@ -10,9 +10,26 @@ Most modern sites render lists from a JSON call. Finding it gives the most stabl
 2. Open candidates with `browser_network_request(index)`; look for an array whose objects carry the values you see on screen. `part: "response-body"` for just the body.
 3. Note what makes the request work: the URL and its paging parameter (`page`, `offset`, `cursor`), request headers like `accept: application/json`, `x-requested-with`, `referer`, `authorization: Bearer …`, `x-api-key`, and whether cookies were sent.
 4. Reproduce it without the browser: `node scripts/probe-http.mjs "<url>" --headers '{"accept":"application/json","referer":"<page>"}'`. Add `--cookies ~/.scrape/sessions/<name>.json` if it needed the session. `status` 200 and `is_json` true → `http` recipe. A challenge page or 403 → the endpoint is fingerprint-protected; use `intercept` (section 2).
-5. Cursor pagination (`next_cursor`, `after`) is not supported by `pages.type: param`; use `dom` or limit to the first page and say so.
+5. Cursor pagination (the response carries `next_cursor`, `endCursor`, `continuation`… and the next request sends it back as `cursor`/`after`): `pages.type: cursor` with `cursor_path` pointing at that value and `{cursor}` where the request takes it (recipe.md, "Cursor pagination"). Look at two consecutive requests to confirm which response field feeds which request parameter, and at the last response to see how the end looks (null, missing, or `has_more: false` next to a cursor that stops moving).
 
-GraphQL: the body is the query. Put the POST body in `http.body` with `{n}` where the page/offset goes; headers must include `content-type: application/json`.
+GraphQL: the body is the query. Put the POST body in `http.body` (an object is sent as JSON with `content-type: application/json`), with `{n}` where the page/offset goes or `{cursor}` for Relay-style connections:
+
+```json
+"pages": { "type": "cursor", "cursor_path": "data.products.pageInfo.endCursor", "max_pages": 50 },
+"http": {
+  "url_template": "https://site/graphql",
+  "method": "POST",
+  "body": {
+    "operationName": "ProductList",
+    "query": "query ProductList($after: String) { products(first: 20, after: $after) { edges { node { id name price } } pageInfo { endCursor hasNextPage } } }",
+    "variables": { "after": "{cursor}" }
+  }
+},
+"items": { "path": "data.products.edges[]" },
+"fields": { "name": "node.name", "price": "node.price" }
+```
+
+The first request sends `"after": null`. Relay servers usually keep returning the last `endCursor` on the final page; the run then ends on the next request, when the cursor stops moving or the page comes back empty. Persisted queries (`extensions.persistedQuery.sha256Hash` instead of `query`) replay the same way: copy the body as the browser sent it.
 
 Short-lived tokens (`authorization` that changes per session): the recipe will expire. Note it in `notes` and expect to re-capture the header when re-running.
 
@@ -22,7 +39,7 @@ The browser shows the JSON call, but `probe-http.mjs` on the same URL returns 40
 
 1. From `browser_network_request(index)` take a regex that identifies the call (`/api/search`, `graphql\\?op=ProductList`) and its method. Keep it as loose as possible while still excluding other JSON calls on the page; query strings change, the path rarely does.
 2. `items.path` and `fields` come from the response body, as for `http`.
-3. `pages` is whatever makes the page fire the call again: numbered pages (`param`), a next button (`next_link`), scrolling or "load more" (`scroll`). Check in the browser that page 2 really triggers a new matching request; a server-rendered first page that only calls the API from page 2 on needs `dom` for page 1 or a start URL that is already API-driven.
+3. `pages` is whatever makes the page fire the call again: numbered pages (`param`), a next button (`next_link`), scrolling or "load more" (`scroll`, or `cursor` when the responses carry a cursor, so the run stops exactly at the end instead of after two idle rounds). Check in the browser that page 2 really triggers a new matching request; a server-rendered first page that only calls the API from page 2 on needs `dom` for page 1 or a start URL that is already API-driven.
 4. `--dry-run`, then read `intercepted` in the summary: `0` means nothing matched (`url_match` wrong, the call fires only after interaction, or the response is not `application/json`). Raise `intercept.timeout_ms` for slow SPAs.
 
 The preview for the user is still DOM-based (`extract`/`highlight` on the rendered list), as with `http`. If even the browser's own call comes back 403, the collector stops with `blocked`; continue with the block ladder in SKILL.md.

@@ -137,6 +137,22 @@
         "Sample rows and a highlighted screenshot were shown and one confirmation asked before the full collection",
         "The dry-run summary's intercepted count and fill rates were read before the full run"
       ]
+    },
+    {
+      "id": 10,
+      "prompt": "이 커뮤니티 피드 글 제목이랑 작성자, 작성시각 최근 200개만 받아줘 https://community.example.com/feed — 스크롤 내리면 계속 나오는 방식이야",
+      "expected_output": "Finds the feed's JSON call after scrolling once, sees that the response carries a next cursor that the following request sends back, and builds a cursor recipe: strategy http (probe-http succeeds) or intercept (probe-http refused) with pages.type cursor, cursor_path and a {cursor} slot. Stops at 200 rows via --limit or max_pages; reports stopped_reason honestly (limit / max_pages vs cursor_end).",
+      "files": [],
+      "expectations": [
+        "Two consecutive feed requests were compared to identify which response field (cursor_path) feeds which request parameter",
+        "The recipe uses pages.type cursor with cursor_path, and for strategy http a {cursor} placeholder in http.url_template or http.body (not a guessed page={n})",
+        "The first request carries no cursor (parameter dropped or null) rather than a hard-coded cursor copied from the browser session",
+        "rate.concurrency is 1 or absent (cursor pages cannot be fetched in parallel)",
+        "The 200-row scope was applied with --limit or max_pages, and the report says whether the feed ended (cursor_end) or was cut at the requested size",
+        "The timestamp column comes from the JSON value (ISO or epoch), not a relative '3분 전' string from the DOM",
+        "Sample rows and a highlighted screenshot were shown and one confirmation asked before the full collection",
+        "The collection was not done by scrolling the DOM and scraping rendered cards when the JSON call was usable"
+      ]
     }
   ]
 }

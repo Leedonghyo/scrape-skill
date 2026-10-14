@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
-  csvCell, cookieHeader, unionColumns, fillRate, parseArgs, validateRecipe, UsageError,
+  csvCell, cookieHeader, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, UsageError,
 } from './lib.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -32,6 +32,8 @@ const offline = process.argv.includes('--offline');
 // ---------- local fixture server ----------
 // /shop?page=N renders a list by fetching /api/search?page=N. The API refuses anything whose user-agent
 // does not say "Chrome" (a stand-in for fingerprint protection: a bare HTTP client gets 403, the page gets JSON).
+// /api/feed is a cursor API (GET ?cursor=, 400 on an empty cursor), /graphql the same feed as a POST with
+// variables.after, and /feed a page that loads the feed with a "more" button.
 function fixtureServer(port = 0) {
   const PRODUCTS = Array.from({ length: 15 }, (_, i) => ({ id: i + 1, title: `상품 ${i + 1}`, price: `${(i + 1) * 1000}원` }));
   const send = (res, status, type, body) => { res.writeHead(status, { 'content-type': type }); res.end(body); };
@@ -44,8 +46,43 @@ function fixtureServer(port = 0) {
     for (const it of (d.data && d.data.items) || []) { const li = document.createElement('li'); li.className = 'item'; li.textContent = it.title + ' ' + it.price; document.getElementById('list').appendChild(li); }
   }).catch(() => {});
 </script></body></html>`;
+  const POSTS = Array.from({ length: 20 }, (_, i) => ({ id: `p${i + 1}`, title: `Post ${i + 1}`, author: { name: `author${(i % 3) + 1}` } }));
+  // cursor "c<offset>"; null once the list is exhausted
+  const feed = (cursor) => {
+    const at = cursor ? Number(String(cursor).slice(1)) : 0;
+    return { items: POSTS.slice(at, at + 5), next_cursor: at + 5 < POSTS.length ? `c${at + 5}` : null };
+  };
+  const feedHtml = `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Fixture feed</title></head><body>
+<h1>Fixture feed</h1><ul id="list"></ul><button id="more">more</button>
+<script>
+  let cursor = null;
+  const load = () => fetch('/api/feed?limit=5' + (cursor ? '&cursor=' + cursor : '')).then((r) => r.json()).then((d) => {
+    for (const it of d.items) { const li = document.createElement('li'); li.textContent = it.title; document.getElementById('list').appendChild(li); }
+    cursor = d.next_cursor;
+    if (!cursor) document.getElementById('more').remove();
+  });
+  document.getElementById('more').addEventListener('click', load);
+  load();
+</script></body></html>`;
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/feed') return send(res, 200, 'text/html; charset=utf-8', feedHtml);
+    if (u.pathname === '/api/feed') {
+      if (u.searchParams.has('cursor') && !u.searchParams.get('cursor')) return json(res, 400, { error: 'empty cursor' });
+      return json(res, 200, feed(u.searchParams.get('cursor')));
+    }
+    if (u.pathname === '/graphql' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (d) => { body += d; });
+      req.on('end', () => {
+        let after;
+        try { after = JSON.parse(body).variables.after; } catch { return json(res, 400, { error: 'bad body' }); }
+        if (after === '' || after === '{cursor}') return json(res, 400, { error: 'bad cursor' });
+        const f = feed(after);
+        json(res, 200, { data: { posts: { edges: f.items.map((node) => ({ node })), pageInfo: { endCursor: f.next_cursor, hasNextPage: !!f.next_cursor } } } });
+      });
+      return undefined;
+    }
     if (u.pathname === '/shop') return send(res, 200, 'text/html; charset=utf-8', shopHtml('/api/search'));
     if (u.pathname === '/refused') return send(res, 200, 'text/html; charset=utf-8', shopHtml('/api/refused'));
     if (u.pathname === '/api/search') {
@@ -115,6 +152,30 @@ throws('validate intercept needs url_match', () => validateRecipe(icRecipe({ int
 throws('validate intercept bad regex', () => validateRecipe(icRecipe({ intercept: { url_match: '(' } })));
 throws('validate next_link still not for http', () => validateRecipe({ version: 1, name: 'x', strategy: 'http', pages: { type: 'next_link', start: 'https://a.test/', next_selector: 'a' }, fields: {} }));
 
+// cursor pagination: URL/body templates and the end-of-list decision
+ok('cursorUrl fills and encodes', cursorUrl('https://a.test/f?limit=5&cursor={cursor}', 'a b/=') === 'https://a.test/f?limit=5&cursor=a%20b%2F%3D');
+ok('cursorUrl empty drops last param', cursorUrl('https://a.test/f?limit=5&cursor={cursor}', '') === 'https://a.test/f?limit=5');
+ok('cursorUrl empty drops first param', cursorUrl('https://a.test/f?cursor={cursor}&limit=5', null) === 'https://a.test/f?limit=5');
+ok('cursorUrl empty drops middle/only param', cursorUrl('https://a.test/f?a=1&after={cursor}&b=2', '') === 'https://a.test/f?a=1&b=2' && cursorUrl('https://a.test/f?after={cursor}', '') === 'https://a.test/f');
+ok('fillBody graphql first page → null', fillBody({ query: 'q', variables: { first: 20, after: '{cursor}' } }, { cursor: '' }) === '{"query":"q","variables":{"first":20,"after":null}}');
+ok('fillBody graphql next page', fillBody({ variables: { after: '{cursor}' } }, { cursor: 'YXJy"' }) === '{"variables":{"after":"YXJy\\""}}');
+ok('fillBody {n} keeps a number', fillBody({ page: '{n}', q: 'p{n}' }, { n: 3 }) === '{"page":3,"q":"p3"}');
+ok('fillBody string bodies', fillBody('{"after":"{cursor}"}', { cursor: '' }) === '{"after":null}' && fillBody('after={cursor}&n={n}', { cursor: 'a b', n: 2 }) === 'after=a%20b&n=2');
+ok('fillBody untouched without vars', fillBody({ a: '{cursor}', b: '{n}' }, {}) === '{"a":"{cursor}","b":"{n}"}');
+ok('nextCursor continues', eq(nextCursor({ meta: { next: 'c5' } }, 'meta.next', ''), { value: 'c5', end: false }));
+ok('nextCursor ends on null / empty / missing', [{ next: null }, { next: '' }, {}].every((d) => nextCursor(d, 'next', 'c5').end));
+ok('nextCursor ends when the cursor did not move', nextCursor({ next: 'c5' }, 'next', 'c5').end === true);
+ok('nextCursor [] takes the last item cursor', nextCursor({ edges: [{ cursor: 'a' }, { cursor: 'b' }] }, 'edges[].cursor', 'a').value === 'b');
+const curRecipe = (over) => ({ version: 1, name: 'x', strategy: 'http', pages: { type: 'cursor', cursor_path: 'next' }, http: { url_template: 'https://a.test/f?c={cursor}' }, fields: {}, ...over });
+ok('validate cursor ok (url, body, intercept)', (() => { try {
+  validateRecipe(curRecipe());
+  validateRecipe(curRecipe({ http: { url_template: 'https://a.test/graphql', method: 'POST', body: { variables: { after: '{cursor}' } } } }));
+  validateRecipe(curRecipe({ strategy: 'intercept', intercept: { url_match: '/f' }, pages: { type: 'cursor', cursor_path: 'next', start: 'https://a.test/' } }));
+  return true; } catch { return false; } })());
+throws('validate cursor needs cursor_path', () => validateRecipe(curRecipe({ pages: { type: 'cursor' } })));
+throws('validate cursor needs a {cursor} slot', () => validateRecipe(curRecipe({ http: { url_template: 'https://a.test/f' } })));
+throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy: 'dom', pages: { type: 'cursor', cursor_path: 'next', start: 'https://a.test/' } })));
+
 // csvCell quoting + array join
 ok('csv plain', csvCell('abc') === 'abc');
 ok('csv quote comma', csvCell('a,b') === '"a,b"');
@@ -148,10 +209,10 @@ if (!offline) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scrape-selftest-'));
   const fixture = await fixtureServer();
   // Async spawn, not spawnSync: the fixture server lives in this process and must keep answering while the collector runs.
-  const run = (recipeFile, args) => new Promise((resolve) => {
+  const run = (recipeFile, args, { keepState = false } = {}) => new Promise((resolve) => {
     const name = JSON.parse(fs.readFileSync(recipeFile, 'utf8')).name;
     const out = path.join(tmp, `${name}.csv`);
-    fs.rmSync(path.join(os.homedir(), '.scrape', 'state', `${name}.json`), { force: true });
+    if (!keepState) fs.rmSync(path.join(os.homedir(), '.scrape', 'state', `${name}.json`), { force: true });
     const child = spawn('node', [path.join(DIR, 'collect.mjs'), recipeFile, '--headless', '--quiet', '--out', out, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
     let stdout = '', stderr = '';
     child.stdout.on('data', (d) => { stdout += d; });
@@ -181,6 +242,16 @@ if (!offline) {
     // intercept: 3 pages x 5 rows from the JSON the page fetched, numbers parsed, page 4 empty ends the run
     ['local-intercept', local('local-intercept'), [], 15, (s) => s.rows === 15 && s.stopped_reason === 'empty_page' && s.intercepted === 4 && s.sample[0]['가격'] === 1000 && s.fill_rate['제목'] === 1],
   ];
+  const GQL = { version: 1, name: 'local-cursor-graphql', strategy: 'http', pages: { type: 'cursor', cursor_path: 'data.posts.pageInfo.endCursor' }, http: { url_template: `${FIXTURE_ORIGIN}/graphql`, method: 'POST', body: { query: 'query Posts($after: String) { posts(first: 5, after: $after) { edges { node { id title } } pageInfo { endCursor hasNextPage } } }', variables: { after: '{cursor}' } } }, items: { path: 'data.posts.edges[]' }, fields: { id: 'node.id', title: 'node.title' }, rate: { delay_ms: 100, jitter_ms: 50, concurrency: 4 } };
+  const FEED = { version: 1, name: 'local-intercept-cursor', strategy: 'intercept', pages: { type: 'cursor', start: `${FIXTURE_ORIGIN}/feed`, cursor_path: 'next_cursor', load_more_selector: '#more', idle_ms: 500 }, intercept: { url_match: '/api/feed', timeout_ms: 5000 }, items: { path: 'items[]' }, fields: { id: 'id', title: 'title' } };
+  live.push(
+    // http + cursor: 4 pages x 5 rows, first request without the cursor param, null cursor ends the run
+    ['local-cursor', local('local-cursor'), [], 20, (s) => s.rows === 20 && s.pages_done === 4 && s.stopped_reason === 'cursor_end'],
+    // the same feed as a GraphQL POST: {cursor} inside http.body (null on the first page); concurrency is ignored
+    ['local-cursor-graphql', local(GQL), [], 20, (s) => s.rows === 20 && s.stopped_reason === 'cursor_end'],
+    // intercept + cursor: the page pages itself through "more"; the cursor only tells us when to stop
+    ['local-intercept-cursor', local(FEED), [], 20, (s) => s.rows === 20 && s.intercepted === 4 && s.stopped_reason === 'cursor_end'],
+  );
   for (const [recipe, file, args, minRows, extra] of live) {
     const res = await run(file, args);
     const s = res.summary;
@@ -192,6 +263,12 @@ if (!offline) {
   // intercept: the API refusing the browser itself is a block (exit 3), not an empty page
   const refused = await run(local({ version: 1, name: 'local-intercept-refused', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/refused` }, intercept: { url_match: '/api/refused', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id' } }), []);
   ok('live intercept: refused API → blocked, exit 3', refused.code === 3 && refused.summary.stopped_reason === 'blocked' && refused.summary.blocked_by?.status === 403, { code: refused.code, stopped: refused.summary.stopped_reason });
+  // cursor + --resume: stop after 2 pages, then continue from the cursor saved in ~/.scrape/state
+  const part = await run(local('local-cursor'), ['--max-pages', '2']);
+  const rest = await run(local('local-cursor'), ['--resume'], { keepState: true });
+  const resumed = fs.existsSync(rest.out) ? fs.readFileSync(rest.out, 'utf8').trim().split('\n').length - 1 : 0;
+  ok('live cursor --resume: 10 rows, then the other 10 from the saved cursor', part.summary.rows === 10 && part.summary.stopped_reason === 'max_pages' && rest.summary.rows === 10 && rest.summary.rows_previous === 10 && rest.summary.stopped_reason === 'cursor_end' && resumed === 20,
+    { first: part.summary.rows, firstStop: part.summary.stopped_reason, second: rest.summary.rows, secondStop: rest.summary.stopped_reason, csvRows: resumed });
   fixture.server.close();
   // write-csv.mjs roundtrip with dedupe
   const rowsFile = path.join(tmp, 'rows.json');

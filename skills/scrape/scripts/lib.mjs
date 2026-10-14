@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 export const SCRIPTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 export const HELPERS_PATH = path.join(SCRIPTS_DIR, 'page', 'helpers.js');
 export const SCRAPE_HOME = path.join(os.homedir(), '.scrape');
-export const PAGE_TYPES = ['single', 'urls', 'param', 'next_link', 'scroll'];
+export const PAGE_TYPES = ['single', 'urls', 'param', 'next_link', 'scroll', 'cursor'];
 export const STRATEGIES = ['dom', 'http', 'embedded', 'intercept'];
 export const FORMATS = ['csv', 'json', 'jsonl'];
 
@@ -88,6 +88,15 @@ export function validateRecipe(r) {
   if (['single', 'next_link', 'scroll'].includes(p.type) && !p.start) fail(`"pages.start" is required for pages.type ${p.type}`);
   if (p.type === 'next_link' && !p.next_selector) fail('"pages.next_selector" is required for pages.type next_link');
   if (['next_link', 'scroll'].includes(p.type) && !inBrowser) fail(`pages.type ${p.type} only works with strategy dom or intercept`);
+  if (p.type === 'cursor') {
+    if (!['http', 'intercept'].includes(r.strategy)) fail('pages.type cursor only works with strategy http or intercept');
+    if (!p.cursor_path || typeof p.cursor_path !== 'string') fail('"pages.cursor_path" (where the response carries the next cursor) is required for pages.type cursor');
+    if (r.strategy === 'intercept' && !p.start) fail('"pages.start" is required for pages.type cursor with strategy intercept');
+    if (r.strategy === 'http') {
+      if (!r.http?.url_template) fail('"http.url_template" is required for pages.type cursor');
+      if (!r.http.url_template.includes('{cursor}') && !JSON.stringify(r.http.body ?? '').includes('{cursor}')) fail('"http.url_template" or "http.body" must contain {cursor}');
+    }
+  }
   if (p.type === 'param') {
     const tmpl = r.strategy === 'http' ? r.http?.url_template || p.template : p.template;
     if (!tmpl || !tmpl.includes('{n}')) fail(r.strategy === 'http' ? '"http.url_template" (or "pages.template") must contain {n}' : '"pages.template" must contain {n}');
@@ -244,6 +253,55 @@ export function jsonRows(data, items, fields) {
     .filter((r) => r != null)
     .map((r) => (names.length ? Object.fromEntries(names.map((n) => [n, jsonField(r, fields[n])])) : r && typeof r === 'object' && !Array.isArray(r) ? r : { value: r }))
     .filter(hasAnyValue);
+}
+
+// ---------- cursor pagination and request templates ----------
+// "{cursor}" in a URL template. An empty cursor (the first page) drops the whole query parameter, because
+// "?after=" is an error on many APIs.
+export function cursorUrl(tmpl, cursor) {
+  if (!isEmpty(cursor)) return tmpl.replaceAll('{cursor}', encodeURIComponent(String(cursor)));
+  return tmpl
+    .replace(/([?&])[^=&#?]+=\{cursor\}(&?)/g, (m, lead, trail) => (trail ? lead : ''))
+    .replaceAll('{cursor}', '');
+}
+
+// "{n}" / "{cursor}" inside http.body. In an object body a value that is exactly the placeholder keeps a JSON
+// type: {n} becomes a number and an empty {cursor} becomes null (GraphQL's `after: null`). A string body is
+// treated as text: JSON-escaped when it looks like JSON, URL-encoded otherwise (form posts).
+export function fillBody(body, vars = {}) {
+  const hasCursor = 'cursor' in vars;
+  const cursor = isEmpty(vars.cursor) ? '' : String(vars.cursor);
+  const text = (s, enc) => {
+    if (hasCursor) s = s.replaceAll('{cursor}', enc(cursor));
+    if (vars.n != null) s = s.replaceAll('{n}', String(vars.n));
+    return s;
+  };
+  if (typeof body === 'string') {
+    const isJson = /^\s*[{[]/.test(body);
+    if (hasCursor && !cursor && isJson) body = body.replaceAll('"{cursor}"', 'null');
+    return text(body, isJson ? (v) => JSON.stringify(v).slice(1, -1) : encodeURIComponent);
+  }
+  const sub = (v) => {
+    if (typeof v === 'string') {
+      if (v === '{cursor}' && hasCursor) return isEmpty(vars.cursor) ? null : vars.cursor;
+      if (v === '{n}' && vars.n != null) return vars.n;
+      return text(v, (x) => x);
+    }
+    if (Array.isArray(v)) return v.map(sub);
+    if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, sub(x)]));
+    return v;
+  };
+  return JSON.stringify(sub(body));
+}
+
+// The cursor for the next request, read from a response at pages.cursor_path. The list has ended when it is
+// missing, null, empty, or the same cursor we just sent (an API that keeps returning its last page).
+// A path with [] ("edges[].cursor") yields one cursor per item; the last one is the page's cursor.
+export function nextCursor(data, cursorPath, current) {
+  let v = getPath(data, cursorPath);
+  if (Array.isArray(v)) v = v.filter((x) => x != null).pop();
+  const end = v == null || v === '' || v === false || typeof v === 'object' || String(v) === String(current ?? '');
+  return { value: end ? null : v, end };
 }
 
 // ---------- embedded JSON inside HTML ----------
