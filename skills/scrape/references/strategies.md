@@ -44,6 +44,12 @@ The browser shows the JSON call, but `probe-http.mjs` on the same URL returns 40
 
 The preview for the user is still DOM-based (`extract`/`highlight` on the rendered list), as with `http`. If even the browser's own call comes back 403, the collector stops with `blocked`; continue with the block ladder in SKILL.md.
 
+### Source maps as a map of the API
+
+When the list is rendered by a bundle and the network panel shows nothing useful yet (the call only fires after a login, a filter or a later page), a published source map can list the endpoints. `sourceMapHints()` returns the page's script URLs and the conventional map location for each (`<script url>.map`) without requesting anything; the authoritative pointer is the `//# sourceMappingURL=` comment on the script's last line. If a `.map` is publicly served, fetch it and search its `sourcesContent` strings for `fetch(`, `axios`, `/api/`, `graphql` to collect endpoint candidates (paths, query parameter names, GraphQL operation names). A 404 is the normal answer in production; do not guess further URLs.
+
+An endpoint found this way is only a candidate. Confirm it exactly like one seen in the network panel: `probe-http.mjs`, then `http` or `intercept`. Read the sources for *where the data comes from*, not for how a request is signed (next section).
+
 ### Where a token or signature comes from
 
 An API call that needs `authorization`, `x-csrf-token`, `x-signature` or similar raises one question before choosing a strategy: can that value be carried into a later run, or does the page make it fresh every time? `requestOrigins` answers it from inside the page:

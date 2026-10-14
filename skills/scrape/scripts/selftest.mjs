@@ -293,6 +293,20 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
   const off = page({ __scrape_no_net: true });
   ok('requestOrigins: collector opt-out leaves fetch untouched', vm.runInContext('window.__scrape.requestOrigins().installed', off) === 'off' && !/__scrape/.test(String(off.fetch)));
 }
+// sourceMapHints(): script URLs + conventional .map locations, trackers skipped, nothing fetched
+{
+  let fetched = 0;
+  const el = (attrs) => ({ getAttribute: (k) => attrs[k] ?? null });
+  const tags = [el({ src: 'https://cdn.other.test/lib/vendor.min.js' }), el({ src: '/static/app.4f3a9c.js?v=7' }), el({ src: 'https://www.googletagmanager.com/gtm.js?id=G-1' }), el({ href: '/static/chunk-list.js' }), el({ src: '/static/app.4f3a9c.js?v=8' })];
+  const g = { URL, console, location: { href: 'https://shop.test/search', origin: 'https://shop.test' }, document: { readyState: 'loading', cookie: '', querySelectorAll: (sel) => (sel.startsWith('script[src]') ? tags : sel === 'script:not([src])' ? [{}, {}] : []) }, fetch: () => { fetched++; return Promise.resolve({}); }, XMLHttpRequest: class { open() {} setRequestHeader() {} send() { fetched++; } } };
+  g.window = g;
+  vm.createContext(g);
+  vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+  const sm = vm.runInContext('window.__scrape.sourceMapHints()', g);
+  ok('sourceMapHints: own bundles first, .map guess without the query, trackers and duplicates dropped', sm.total === 3 && eq(sm.scripts.map((x) => x.map_guess), ['https://shop.test/static/app.4f3a9c.js.map', 'https://shop.test/static/chunk-list.js.map', 'https://cdn.other.test/lib/vendor.min.js.map']) && sm.scripts[0].src.endsWith('?v=7') && sm.scripts[2].same_origin === false && sm.inline_scripts === 2, sm.scripts);
+  ok('sourceMapHints: makes no network request', fetched === 0);
+  ok('helpers help() lists the new functions', ['requestOrigins', 'sourceMapHints'].every((k) => k in vm.runInContext('window.__scrape.help()', g)));
+}
 // session export: cookies for every strategy, localStorage origins for the collector's browser
 {
   const f = path.join(os.tmpdir(), `scrape-selftest-state-${process.pid}.json`);

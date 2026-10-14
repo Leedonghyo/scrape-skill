@@ -688,6 +688,30 @@
     };
   };
 
+  // ---------- source map hints ----------
+  // The page's script URLs and where each one's source map would sit by convention (<script url>.map).
+  // Nothing is requested here: whether a map is really published is for the caller to check.
+  S.sourceMapHints = (opts = {}) => {
+    const seen = new Set();
+    const scripts = [];
+    for (const el of qsa('script[src], link[rel="modulepreload"][href]')) {
+      let u;
+      try { u = new URL(el.getAttribute('src') || el.getAttribute('href'), location.href); } catch (e) { continue; }
+      if (!/^https?:$/.test(u.protocol) || NOISE.test(u.href)) continue;
+      const bare = u.origin + u.pathname;
+      if (seen.has(bare)) continue;
+      seen.add(bare);
+      scripts.push({ src: cut(u.href, 200), map_guess: cut(bare + '.map', 200), same_origin: u.origin === location.origin });
+    }
+    scripts.sort((a, b) => Number(b.same_origin) - Number(a.same_origin)); // the site's own bundles first, CDNs after
+    return {
+      total: scripts.length,
+      scripts: scripts.slice(0, opts.limit || 30),
+      inline_scripts: qsa('script:not([src])').length,
+      note: 'map_guess is the conventional location only (the real one is the "//# sourceMappingURL=" comment at the end of the script, or its SourceMap response header). Nothing was requested.',
+    };
+  };
+
   S.diagnose = () => {
     const title = norm(document.title);
     const fullText = norm(document.body ? document.body.innerText : '');
@@ -942,6 +966,7 @@
     embedded: 'embedded() / embeddedGet(source, path) -> JSON the page already ships',
     pagination: 'pagination() -> next links, page params, infinite scroll guess',
     apiHints: 'apiHints() -> XHR/fetch URLs seen so far (also see browser_network_requests)',
+    sourceMapHints: 'sourceMapHints() -> this page\'s script URLs and the conventional .map URL for each (no network requests)',
     requestOrigins: 'requestOrigins({match, frames}) -> per API call: header names, where each value comes from (storage:<key> / cookie:<name> / computed), and the script frames that sent it. Never returns header values',
     officialSources: 'officialSources() -> links to API docs, developer portals, RSS/sitemaps on this page',
     diagnose: 'diagnose() -> bot-block / login / paywall signals',
