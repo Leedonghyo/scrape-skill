@@ -39,6 +39,16 @@ No key, no pricing page (RSS, a public JSON feed, an open data portal) — fold 
 - ko: "이 페이지는 로그인이 필요해요. 열려 있는 Chrome 창에서 로그인해주시면 이어서 진행할게요. 비밀번호는 제가 다루지 않아요."
 - en: "This page needs a login. Please sign in in the open Chrome window and tell me when you're done. I don't handle passwords."
 
+### User declines to log in
+- ko: "알겠어요. 로그인 없이 보이는 범위에서는 상품 목록이 나오지 않아서, 이번에는 받은 데이터가 없어요. 나중에 로그인하실 수 있으면 같은 창에서 이어서 할 수 있고, 정기적으로 필요하시면 공식 경로(링크)가 있어요."
+- en: "Understood. Without a login this page shows no list, so nothing was collected this time. If you can log in later we can continue in the same window; for regular use there's an official route (link)."
+- Before any extra probing (a guessed API, another domain): "로그인 없이 되는 길이 있는지 한 가지 더 확인해볼까요? (무엇을: …)" — only with a yes.
+
+### User says stop after a block
+- ko: "네, 여기서 멈출게요. 지금까지 받은 N행을 저장했어요(경로). 나머지는 받지 않았어요."
+- en: "OK, stopping here. I saved the N rows collected so far (path); the rest was not collected."
+- N may be 0: then say nothing was saved. Do not move to another browser unless the user says yes to that specifically.
+
 ### Paywall
 - ko: "이 내용은 구독자용이에요. 구독 계정이 있으면 로그인해주시고, 없으면 공개된 부분만 수집할 수 있어요. 어떻게 할까요?"
 - en: "This content is for subscribers. If you have an account, sign in; otherwise I can collect only the public part. Which?"
