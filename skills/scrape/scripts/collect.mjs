@@ -17,7 +17,7 @@ import {
   UsageError, EnvError, BlockedError,
   expandHome, sleep, isEmpty, hasAnyValue, shorten, localDate, jittered, parseArgs, loadRecipe,
   defaultHeaders, mergeHeaders, loadStorageState, cookieHeader, detectBlockedHttp,
-  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse,
+  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse, cursorUrl, fillBody, nextCursor,
 } from './lib.mjs';
 
 const USAGE = `usage: node collect.mjs <recipe.json | recipe-name> [--max-pages N] [--limit N] [--dry-run] [--out PATH]
@@ -172,6 +172,11 @@ class Collector {
         return { url: tmpl.replaceAll('{n}', String(n)), n };
       }
       case 'next_link': return i === 0 ? { url: r.url || p.start } : prev?.next ? prev.next : null;
+      case 'cursor': { // http only; each request needs the cursor the previous response returned
+        if (i > 0 && (!prev || prev.cursorEnd)) return null;
+        const value = i === 0 ? r.value ?? p.start_cursor ?? '' : prev.nextCursor;
+        return { url: cursorUrl(this.recipe.http.url_template, value), cursorValue: value };
+      }
       default: return null;
     }
   }
@@ -181,6 +186,7 @@ class Collector {
       case 'urls': return this.pages.urls[target.index + 1] ? { index: target.index + 1 } : null;
       case 'param': return { n: target.n + (this.pages.step ?? 1) };
       case 'next_link': return result.next ? { url: result.next.url || result.pageUrl } : null;
+      case 'cursor': return result.cursorEnd ? null : { value: result.nextCursor };
       default: return null;
     }
   }
@@ -189,7 +195,10 @@ class Collector {
     this.prepareOutput();
     const type = this.pages.type;
     const maxPages = this.opts['max-pages'] ?? (type === 'scroll' ? this.pages.max_rounds ?? 20 : this.pages.max_pages ?? 20);
-    if (type === 'scroll') return this.runScroll(maxPages);
+    // intercept + cursor: the page pages itself (scroll / "load more"); we only watch the cursor to know when it ends.
+    if (type === 'scroll' || (type === 'cursor' && this.recipe.strategy === 'intercept')) return this.runScroll(maxPages);
+    if (type === 'cursor' && (this.rate.concurrency || 1) > 1) this.log('cursor pagination is sequential; ignoring rate.concurrency');
+    const endReason = type === 'next_link' ? 'no_next_link' : type === 'cursor' ? 'cursor_end' : 'end_of_list';
     const stopWhenEmpty = this.pages.stop_when_empty !== false;
     const total = type === 'single' ? 1 : type === 'urls' ? Math.min(this.pages.urls.length - (this.resumeFrom?.cursor?.index || 0), maxPages) : maxPages;
     // http pages are independent, so rate.concurrency can fetch a window of them at once (one pause per window).
@@ -200,10 +209,10 @@ class Collector {
     for (let i = 0; i < maxPages; i++) {
       if (this.aborted) { this.stop = 'interrupted'; break; }
       const target = this.targetAt(i, prev);
-      if (!target) { this.stop = type === 'next_link' ? 'no_next_link' : 'end_of_list'; break; }
+      if (!target) { this.stop = endReason; break; }
       if (target.url && visited.has(target.url) && type === 'next_link') { this.stop = 'no_next_link'; break; }
       visited.add(target.url);
-      this.cursor = type === 'param' ? { n: target.n } : type === 'urls' ? { index: target.index } : { url: target.url };
+      this.cursor = type === 'param' ? { n: target.n } : type === 'urls' ? { index: target.index } : type === 'cursor' ? { value: target.cursorValue } : { url: target.url };
       let result;
       if (conc > 1) {
         if (!inflight.has(i)) {
@@ -223,11 +232,11 @@ class Collector {
       this.pagesDone++;
       const kept = await this.acceptRows(result.rows);
       this.log(`page ${i + 1}/${total} → ${kept.length} rows (total ${this.previousRows + this.rows.length})`);
-      if (!kept.length && stopWhenEmpty) { this.stop = result.rows.length ? 'all_duplicates' : 'empty_page'; this.saveState(null); break; } // list exhausted: mark done so --resume starts fresh
+      if (!kept.length && stopWhenEmpty) { this.stop = result.cursorEnd ? 'cursor_end' : result.rows.length ? 'all_duplicates' : 'empty_page'; this.saveState(null); break; } // list exhausted: mark done so --resume starts fresh
       this.flush();
       const next = this.cursorAfter(target, result);
       this.saveState(next);
-      if (!next) { this.stop = type === 'next_link' ? 'no_next_link' : 'end_of_list'; break; }
+      if (!next) { this.stop = endReason; break; }
       if (this.limitReached()) { this.stop = 'limit'; break; }
       if (this.dry) { this.stop = 'dry_run'; break; }
     }
@@ -241,33 +250,45 @@ class Collector {
     // intercept: growth is measured in captured API responses instead of DOM items; the listener goes on before the navigation.
     const cap = this.recipe.strategy === 'intercept' ? this.capture(page) : null;
     const hits = [];
+    // pages.type cursor: the first load is page 1, every round after it one more; the run ends when a response's cursor does.
+    const cursorPath = this.pages.type === 'cursor' ? this.pages.cursor_path : null;
+    const first = cursorPath ? 1 : 0;
+    let cursor = '';
+    let ended = false;
+    const take = async (waitFirst) => {
+      const fresh = await this.settle(cap, page, waitFirst);
+      hits.push(...fresh);
+      if (cursorPath) for (const h of fresh) { const c = nextCursor(h.data, cursorPath, cursor); if (c.end) ended = true; else cursor = c.value; }
+    };
     let rows;
     try {
       await this.navigate(page, this.pages.start, this.recipe.wait);
-      if (cap) hits.push(...await this.settle(cap, page));
+      if (cap) await take(true);
+      this.pagesDone = first;
       const container = this.recipe.items?.container || null;
       const count = async () => {
-        if (cap) { hits.push(...await this.settle(cap, page, false)); return hits.length; }
+        if (cap) { await take(false); return hits.length; }
         return page.evaluate((c) => (c ? document.querySelectorAll(c).length : (document.scrollingElement || document.documentElement).scrollHeight), container);
       };
       const idle = this.pages.idle_ms ?? 1500;
       let last = await count();
       let stale = 0;
-      for (let round = 1; round <= maxRounds && !this.aborted; round++) {
+      for (let round = 1; round <= maxRounds - first && !ended && !this.aborted; round++) {
         const clicked = this.pages.load_more_selector
           ? await page.evaluate((s) => { const b = document.querySelector(s); if (!b) return false; b.scrollIntoView({ block: 'center' }); b.click(); return true; }, this.pages.load_more_selector)
           : false;
         if (!clicked) await page.evaluate(() => window.scrollTo(0, (document.scrollingElement || document.documentElement).scrollHeight));
         await sleep(idle);
         const now = await count();
-        this.pagesDone = round;
-        this.log(`scroll round ${round}/${maxRounds} → ${now} ${cap ? 'responses' : container ? 'items' : 'px'}`);
+        this.pagesDone = round + first;
+        this.log(`scroll round ${round}/${maxRounds - first} → ${now} ${cap ? 'responses' : container ? 'items' : 'px'}`);
         if (now <= last && ++stale >= 2) { this.stop = 'scroll_idle'; break; } // one grace round for slow loaders
         if (now > last) stale = 0;
         last = now;
       }
       if (this.aborted) this.stop = 'interrupted';
       if (!this.stop) this.stop = 'max_pages';
+      if (ended) this.stop = 'cursor_end';
       if (cap && !hits.length) this.stop = 'empty_page'; // nothing matched intercept.url_match at all
       rows = cap ? this.hitRows(hits) : await this.extractDom(page, this.recipe.fields, container);
     } finally { cap?.stop(); }
@@ -377,10 +398,19 @@ class Collector {
     if (pause) await this.pause();
     const r = this.recipe;
     const isHttp = r.strategy === 'http';
-    const res = await this.fetchText(target.url, isHttp ? r.http : null, isHttp ? 'json' : 'html');
+    const vars = {}; // placeholders for http.body; the URL was already filled by targetAt
+    if (target.n != null) vars.n = target.n;
+    if (this.pages.type === 'cursor') vars.cursor = target.cursorValue;
+    const res = await this.fetchText(target.url, isHttp ? r.http : null, isHttp ? 'json' : 'html', vars);
     if (res.status === 404 || res.status === 410) return { rows: [] }; // past the last page: let stop_when_empty end the run
     const data = isHttp ? this.parseJson(res) : extractEmbedded(res.text, r.embedded.source);
-    return { rows: jsonRows(data, r.items, r.fields) };
+    const out = { rows: jsonRows(data, r.items, r.fields) };
+    if (this.pages.type === 'cursor') {
+      const c = nextCursor(data, this.pages.cursor_path, target.cursorValue);
+      out.nextCursor = c.value;
+      out.cursorEnd = c.end;
+    }
+    return out;
   }
 
   parseJson(res) {
@@ -389,13 +419,13 @@ class Collector {
     throw new UsageError(`response from ${res.url} is not JSON (content-type ${res.contentType || 'unknown'}); the endpoint may need cookies or headers — check it with probe-http.mjs`);
   }
 
-  async fetchText(url, http, kind) {
+  async fetchText(url, http, kind, vars) {
     const headers = mergeHeaders(defaultHeaders(kind), this.recipe.session?.headers, http?.headers);
     const cookie = this.session ? cookieHeader(this.session.cookies, url) : null;
     if (cookie && !headers.cookie) headers.cookie = cookie;
     let body;
     if (http?.body != null) {
-      body = typeof http.body === 'string' ? http.body : JSON.stringify(http.body);
+      body = fillBody(http.body, vars);
       if (typeof http.body !== 'string' && !headers['content-type']) headers['content-type'] = 'application/json';
     }
     let res;

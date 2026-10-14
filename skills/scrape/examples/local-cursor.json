@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "local-cursor",
+  "source": "http://127.0.0.1:8765/feed",
+  "strategy": "http",
+  "pages": { "type": "cursor", "cursor_path": "next_cursor", "max_pages": 20 },
+  "http": { "url_template": "http://127.0.0.1:8765/api/feed?limit=5&cursor={cursor}", "method": "GET" },
+  "items": { "path": "items[]" },
+  "fields": {
+    "id": "id",
+    "title": "title",
+    "author": "author.name"
+  },
+  "rate": { "delay_ms": 200, "jitter_ms": 100 },
+  "output": { "format": "csv", "dedupe_key": "id" },
+  "notes": "Example: cursor pagination. The first request is sent without the cursor parameter (the fixture answers 400 to an empty `cursor=`); each response's next_cursor feeds the next request, and null ends the run with stopped_reason cursor_end. Runs against the fixture server: `node scripts/selftest.mjs --serve` (selftest itself starts the server on a free port and rewrites these URLs)."
+}
