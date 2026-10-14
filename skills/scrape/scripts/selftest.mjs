@@ -95,6 +95,10 @@ function fixtureServer(port = 0) {
       return undefined;
     }
     if (u.pathname === '/shop') return send(res, 200, 'text/html; charset=utf-8', shopHtml('/api/search'));
+    // two calls per page: the second starts 40 ms after the first one finished
+    if (u.pathname === '/twice') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture twice</title></head><body><h1>Fixture twice</h1><script>
+  fetch('/api/search?page=1').then((r) => r.json()).then(() => setTimeout(() => fetch('/api/search?page=2'), 40));
+</script></body></html>`);
     if (u.pathname === '/refused') return send(res, 200, 'text/html; charset=utf-8', shopHtml('/api/refused'));
     if (u.pathname === '/api/search') {
       if (!/Chrome/.test(req.headers['user-agent'] || '')) return json(res, 403, { error: 'browsers only' });
@@ -307,6 +311,18 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
   ok('sourceMapHints: makes no network request', fetched === 0);
   ok('helpers help() lists the new functions', ['requestOrigins', 'sourceMapHints'].every((k) => k in vm.runInContext('window.__scrape.help()', g)));
 }
+// diagnose(): "429" only means rate limiting next to error/status wording, not as an item number or a price
+{
+  const diag = (title, text) => {
+    const g = { URL, console, location: { href: 'https://shop.test/list', origin: 'https://shop.test' }, document: { readyState: 'loading', cookie: '', title, body: { innerText: text }, documentElement: { innerHTML: '' }, querySelector: () => null, querySelectorAll: () => [] }, __scrape_no_net: true };
+    g.window = g;
+    vm.createContext(g);
+    vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+    return vm.runInContext('window.__scrape.diagnose()', g);
+  };
+  ok('diagnose: short list page with "Item 429" / price 1,429 is not a block', diag('Catalogue page 22', 'Item 428 ₩1,428 Item 429 ₩1,429 Item 430').blocked === false);
+  ok('diagnose: real 429 pages are still rate_limited', ['429 Too Many Requests', 'Error 429', 'HTTP 429: slow down', '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.'].every((t) => diag('', t).kind === 'rate_limited') && diag('Error code: 429', 'nginx').kind === 'rate_limited');
+}
 // session export: cookies for every strategy, localStorage origins for the collector's browser
 {
   const f = path.join(os.tmpdir(), `scrape-selftest-state-${process.pid}.json`);
@@ -404,6 +420,9 @@ if (!offline) {
   // intercept: the API refusing the browser itself is a block (exit 3), not an empty page
   const refused = await run(local({ version: 1, name: 'local-intercept-refused', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/refused` }, intercept: { url_match: '/api/refused', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id' } }), []);
   ok('live intercept: refused API → blocked, exit 3', refused.code === 3 && refused.summary.stopped_reason === 'blocked' && refused.summary.blocked_by?.status === 403, { code: refused.code, stopped: refused.summary.stopped_reason });
+  // intercept settle: a second call shortly after the first is still collected, without a long fixed wait
+  const twice = await run(local({ version: 1, name: 'local-intercept-twice', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/twice` }, intercept: { url_match: '/api/search', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id' } }), []);
+  ok('live intercept: both calls of one page are collected', twice.summary.rows === 10 && twice.summary.intercepted === 2, { rows: twice.summary.rows, intercepted: twice.summary.intercepted });
   // session.cookies_file also carries localStorage: without it the SPA's API answers 401 (→ login_required, exit 3),
   // with it the collector's browser has the token and the page's own call succeeds.
   const APP = { version: 1, name: 'local-intercept-session', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/app` }, intercept: { url_match: '/api/private', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id', title: 'title' } };

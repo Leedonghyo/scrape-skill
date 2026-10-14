@@ -740,7 +740,9 @@
     if (/_incapsula_resource|incapsula incident id|powered by incapsula/i.test(document.documentElement.innerHTML.slice(0, 20000) + body)) add('imperva', 'js_challenge', 'incapsula');
     if (/reference\s*#\s*[\da-f.]{10,}|akamai/i.test(body) && /access denied|denied/i.test(body)) add('akamai', 'access_denied', 'akamai denied page');
     if (/access denied|403 forbidden|forbidden|차단되었습니다|접근이 거부/i.test(title + ' ' + body) && body.length < 400) add(d.vendor || 'unknown', 'access_denied', 'short denied page');
-    if (/too many requests|rate limit|429|잠시 후 다시|요청이 너무 많/i.test(title + ' ' + body) && body.length < 600) add(d.vendor || 'unknown', 'rate_limited', 'rate limit text');
+    // A bare "429" is not enough: a short list page with "Item 429" or a price of 1,429 is not a rate limit.
+    // The number only counts next to error/status wording ("Error 429", "HTTP 429", "429 Too Many Requests").
+    if (/too many requests|rate limit|\b(?:error|http|status|code)[\s:#]*429\b|잠시 후 다시|요청이 너무 많/i.test(title + ' ' + body) && body.length < 600) add(d.vendor || 'unknown', 'rate_limited', 'rate limit text');
     if (/pardon our interruption|unusual traffic|automated access|bot detected|robot/i.test(body) && body.length < 800) add(d.vendor || 'unknown', 'bot_page', 'bot interstitial text');
     // `body` is only the first 600 chars, so the old `body.length < 1500` was always true and any page with a
     // password field counted as a login wall. Use the full text length, as the comment always intended.
