@@ -136,6 +136,7 @@ List page gives title + URL; the user also wants description or specs → `detai
 ### SPAs and timing
 
 - The list renders after JS: `wait.selector` set to the container selector, or `wait.network_idle: true` when content streams in.
+- Paged list whose tail loads on scroll (the browser shows 50 after scrolling, `--dry-run` gets 30): keep `pages.type` `param`/`next_link` and add `wait.scroll: { "count": <items per page> }`. `pages.type: scroll` is for one endless page, not this.
 - Content differs per locale: set `session.headers["accept-language"]` for `http`; for `dom` the collector's Chrome uses the system language, note it if it matters.
 - Dates like "3일 전" / "2 hours ago" are relative; prefer the `datetime` attribute or a JSON timestamp, else record the collection date in a column.
 
