@@ -753,6 +753,15 @@
     // `body` is only the first 600 chars, so the old `body.length < 1500` was always true and any page with a
     // password field counted as a login wall. Use the full text length, as the comment always intended.
     d.login_wall = has('input[type="password"]') && (thin || /sign in|log in|login|로그인/i.test(title));
+    // A wall can also be a thin page with only a "please log in" message and a button, no password field
+    // (Shopee redirects visitors to /verify/traffic/error: "看起來您尚未登入。請登入以繼續"). The title often
+    // stays the site's normal title, so read the text, and the URL path as a second hint.
+    if (!d.login_wall && thin) {
+      const loginAsk = /(?:please |to continue,? )?(?:log|sign) ?in to (?:continue|view|see)|you(?:'re| are) not (?:logged|signed) in|log ?in required|로그인이 필요|로그인 후 (?:이용|확인|계속)|로그인해 ?주세요|請登入|請先登入|尚未登入|请登录|请先登录|尚未登录|ログインしてください|ログインが必要/i;
+      const loginPath = /\/(?:login|log-in|signin|sign-in|ap\/signin|auth|verify)(?:\/|$|\?)/i.test(location.pathname + '/');
+      if (loginAsk.test(title + ' ' + fullText)) { d.login_wall = true; d.signals.push('login prompt text'); }
+      else if (loginPath && /\b(?:log ?in|sign ?in)\b|로그인|登入|登录|ログイン/i.test(fullText)) { d.login_wall = true; d.signals.push('login path + login button'); }
+    }
     d.paywall_hint = has('[class*="paywall"], [id*="paywall"], [class*="subscribe-wall"], [class*="premium-overlay"]') || /subscribe to continue|구독하고 계속|유료 회원|로그인 후 이용|구독자 전용/i.test(body);
     d.age_or_consent_gate = has('[class*="cookie"] button, #onetrust-banner-sdk, .cc-banner, [id*="consent"] button');
     d.text_length = (document.body ? document.body.innerText : '').length;
