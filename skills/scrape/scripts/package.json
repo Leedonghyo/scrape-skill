@@ -12,6 +12,7 @@
     "collect": "node collect.mjs",
     "probe": "node probe-http.mjs",
     "write-csv": "node write-csv.mjs",
+    "har-scan": "node har-scan.mjs",
     "test": "node selftest.mjs",
     "test:offline": "node selftest.mjs --offline"
   },

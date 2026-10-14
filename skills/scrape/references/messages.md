@@ -55,6 +55,14 @@ No key, no pricing page (RSS, a public JSON feed, an open data portal) — fold 
 - ko: "사이트가 사람인지 확인을 요구하고 있어요 (Cloudflare). Chrome 창에서 확인 버튼을 눌러주시면 이어서 할게요."
 - en: "The site is asking for a human check (Cloudflare). Please click through it in the Chrome window and I'll continue."
 
+### Asking for a HAR file (the assistant's browser is blocked, the user's is not)
+- ko: "제 쪽 브라우저는 막혀서, 쓰시는 Chrome에서 기록 파일을 하나만 저장해 주시면 그걸로 데이터가 오는 주소를 찾을게요. ① 그 페이지에서 F12(맥은 ⌥⌘I)를 누르고 위쪽 'Network(네트워크)' 탭을 엽니다. ② 그 상태로 페이지를 새로고침하고, 목록이 다 뜨면 한 번 스크롤하거나 2페이지로 넘어가 주세요. ③ Network 탭 위쪽의 아래쪽 화살표(↓, 'Export HAR') 아이콘을 눌러 저장하고, 저장된 파일 경로를 알려주세요. 이 파일에는 로그인 정보가 들어 있을 수 있으니 다른 사람에게 보내거나 메신저·깃에 올리지 마시고, 끝나면 지우세요. 저는 값은 읽지 않고 주소와 항목 이름만 봅니다."
+- en: "My browser is blocked here, so I need one recording from your own Chrome to find where the data comes from. (1) On that page press F12 (⌥⌘I on Mac) and open the 'Network' tab. (2) With it open, reload the page, and once the list shows, scroll once or go to page 2. (3) Click the download arrow (↓, 'Export HAR') at the top of the Network tab, save the file, and tell me its path. The file can contain your login session, so don't send it to anyone or put it in chat or git, and delete it when we're done. I only read addresses and field names from it, not the values."
+
+When the scan reports `credentials_absent` and the API turned out to need a login:
+- ko: "Chrome은 기본으로 로그인 정보(쿠키·인증 헤더)를 뺀 파일을 저장해요. 그래서 이 주소가 로그인이 필요한지 파일만으로는 알 수 없었고, 직접 불러보니 로그인이 필요했어요. 방법은 둘입니다. (1) 열려 있는 Chrome 창에서 로그인하시면 제가 그 창으로 받아오는 방법(추천), (2) 개발자 도구 설정 → Preferences → Network에서 'Allow to generate HAR with sensitive data'를 켜고 다시 저장하는 방법. 두 번째 파일은 비밀번호와 같은 수준으로 다뤄 주세요."
+- en: "Chrome saves that file without login data (cookies, auth headers) by default, so the file alone could not show whether this address needs a login; calling it directly showed that it does. Two options: (1) sign in in the open Chrome window and I collect through that window (recommended), or (2) turn on 'Allow to generate HAR with sensitive data' under DevTools Settings → Preferences → Network and save again. Treat that second file like a password."
+
 ### Blocked, could not proceed
 - ko: "이 사이트는 지금 자동 수집을 적극적으로 막고 있어요. JSON 경로도 없고, 확인을 통과한 뒤에도 몇 페이지마다 다시 막혔어요. 가능한 대안은 (1) 공식 API, (2) 필요한 페이지만 직접 보시면서 제가 정리해드리는 방법이에요."
 - en: "This site is actively refusing automated collection right now. There was no JSON route, and it re-blocked every few pages even after the check. Alternatives: (1) the official API, (2) you browse the pages you need and I structure what you copy."

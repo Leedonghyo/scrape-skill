@@ -204,6 +204,14 @@ export function detectBlockedHttp(status, headers, text) {
   return { blocked: !!kind, vendor: kind ? vendor || 'unknown' : vendor, kind, signals };
 }
 
+// Tracker / ads / analytics hosts. page/helpers.js is browser-only and cannot be imported, so its NOISE
+// literal is read from the source instead of keeping a second copy here that would drift.
+export function noiseRegex() {
+  const m = fs.readFileSync(HELPERS_PATH, 'utf8').match(/const NOISE = \/(.+)\/([a-z]*);/);
+  if (!m) throw new Error('NOISE regex not found in page/helpers.js');
+  return new RegExp(m[1], m[2]);
+}
+
 // ---------- JSON paths and fields (grammar identical to page/helpers.js getPath) ----------
 export function getPath(obj, p) {
   if (!p || p === '$') return obj;
