@@ -104,7 +104,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 탐지 계층(IP 평판, TLS·HTTP 지문, 헤더 일관성, JS 챌린지, 행동 분석, Turnstile/reCAPTCHA, 허니팟, 쿠키 일관성)은 `references/blocks.md`에 설명돼 있습니다. 사다리:
 
-1. **다른 문 찾기.** JSON 엔드포인트, RSS, 사이트맵, 모바일·AMP 버전이 챌린지 없이 같은 데이터를 주는 경우가 많습니다.
+1. **다른 문 찾기.** JSON 엔드포인트, RSS, 사이트맵, 모바일·AMP 버전이 챌린지 없이 같은 데이터를 주는 경우가 많습니다. MCP 창 자체가 막혀 네트워크를 볼 수 없으면, 사용자에게 자기 Chrome에서 HAR 파일을 저장해 달라고 하고(문구는 `references/messages.md`) `node <skill-dir>/scripts/har-scan.mjs <file.har> --match "<화면에 보이는 값>"`으로 데이터 API를 찾습니다. Chrome의 기본 저장은 sanitized라 쿠키·인증 헤더가 빠져 있으니, 그 헤더가 필요한 API라면 그 사실을 사용자에게 알려주세요. HAR는 민감한 파일입니다. 내용을 대화에 옮기지 말고 스캐너 출력만 쓰세요.
 2. **사람이 확인을 통과하게.** Playwright MCP 창은 사용자가 클릭할 수 있는 실제 Chrome입니다. 챌린지를 완료해 달라고 하고, 기다리고, `overview()` 재실행. 수집기가 통과한 세션을 물려받도록 쿠키를 내보냅니다.
 3. **사람처럼 행동.** `rate.delay_ms`를 올리고(3000+), `concurrency` 1 유지, 수집기를 `--headful --wait-for-human`으로 돌려 재확인 때 실패 대신 멈추게. `--wait-for-human`은 `js_challenge`·`turnstile`·`captcha`·`login_required`에만 유효하고, `access_denied`·`rate_limited`는 사람이 클릭으로 통과할 수 없어 즉시 종료합니다(`collect.mjs`의 `SOLVABLE_BY_HUMAN`). **`diagnosis.kind`가 `access_denied`인데 MCP 창에서는 다음 페이지가 열리면 이 단계를 건너뛰고 바로 4단계로 갑니다.** 수집기 자체 브라우저의 속도를 늦춰도 Akamai가 그 브라우저에 대해 이미 내린 판정은 바뀌지 않습니다.
 4. **사용자의 실제 브라우저로 수집** (수집기 자체 브라우저에는 하드 차단 — 예: Akamai가 1페이지 이후 403 — 을 주지만 사람에게는 잘 열리는 사이트). 두 가지 방법:
@@ -149,6 +149,11 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 node <skill-dir>/scripts/collect.mjs <name|recipe.json> [--dry-run] [--max-pages N] [--limit N] [--out PATH] [--format csv|json|jsonl] [--headful] [--wait-for-human] [--cdp PORT|URL] [--resume]
 ```
 종료 코드: 0 성공 · 1 레시피 오류 · 2 브라우저/환경 · 3 차단 또는 로그인 필요.
+
+HAR 스캐너(사용자가 저장한 HAR에서 데이터 API 후보·배열 경로·페이지/커서 파라미터·추천 전략. 헤더는 이름만 출력):
+```
+node <skill-dir>/scripts/har-scan.mjs <file.har> [--match "화면에 보이는 값"] [--limit 10]
+```
 
 실제 브라우저 폴백 저장기(`drain()` 뒤 — 행을 먼저 `.json` 파일로 저장):
 ```

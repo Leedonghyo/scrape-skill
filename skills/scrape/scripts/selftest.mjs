@@ -21,7 +21,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
-  csvCell, cookieHeader, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, UsageError,
+  csvCell, cookieHeader, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, noiseRegex, UsageError,
 } from './lib.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -175,6 +175,66 @@ ok('validate cursor ok (url, body, intercept)', (() => { try {
 throws('validate cursor needs cursor_path', () => validateRecipe(curRecipe({ pages: { type: 'cursor' } })));
 throws('validate cursor needs a {cursor} slot', () => validateRecipe(curRecipe({ http: { url_template: 'https://a.test/f' } })));
 throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy: 'dom', pages: { type: 'cursor', cursor_path: 'next', start: 'https://a.test/' } })));
+
+// har-scan.mjs: ranking, base64 / missing bodies, cursor round-trip, and above all no credential in the output
+{
+  const SECRETS = { bearer: 'FAKE_BEARER_tok_9f8e7d6c5b4a', cookie: 'FAKE_COOKIE_val_a1b2c3d4e5', sig: 'FAKE_SIG_0123456789abcdef', key: 'FAKE_APIKEY_zz99yy88xx77', abck: 'FAKE_ABCK_q1w2e3r4t5y6', cur1: 'FAKE_CURSOR_one_111', cur2: 'FAKE_CURSOR_two_222', resp: 'FAKE_RESPTOKEN_r4nd0m' };
+  const hdr = (o) => Object.entries(o).map(([name, value]) => ({ name, value }));
+  const entry = (method, url, json, { headers = {}, cookies = [], post, encoding, status = 200, mime = 'application/json' } = {}) => ({
+    _resourceType: 'fetch',
+    request: { method, url, headers: hdr({ 'User-Agent': 'Mozilla/5.0 Chrome/141', Accept: 'application/json', ...headers }), cookies, ...(post ? { postData: { mimeType: 'application/json', text: JSON.stringify(post) } } : {}) },
+    response: { status, headers: hdr({ 'Set-Cookie': `sid=${SECRETS.cookie}` }), content: { mimeType: mime, ...(json === undefined ? {} : encoding === 'base64' ? { text: Buffer.from(JSON.stringify(json)).toString('base64'), encoding: 'base64' } : { text: typeof json === 'string' ? json : JSON.stringify(json) }) } },
+  });
+  const products = (from) => ({ data: { total: 15, items: Array.from({ length: 5 }, (_, i) => ({ id: from + i, title: `기계식 키보드 ${from + i}`, price: 39000 + i, url: `/p/${from + i}` })) }, session: { token: SECRETS.resp } });
+  const auth = { headers: { Authorization: `Bearer ${SECRETS.bearer}`, Cookie: `sid=${SECRETS.cookie}; _abck=${SECRETS.abck}`, 'X-Signature': SECRETS.sig, Referer: 'https://shop.test/search' }, cookies: [{ name: 'sid', value: SECRETS.cookie }, { name: '_abck', value: SECRETS.abck }] };
+  const posts = (endCursor) => ({ data: { posts: { edges: [{ node: { id: 1, title: 'a' } }, { node: { id: 2, title: 'b' } }, { node: { id: 3, title: 'c' } }], pageInfo: { endCursor, hasNextPage: true } } } });
+  const gql = (after) => ({ operationName: 'Posts', query: 'query Posts($after: String) { posts(after: $after) { edges { node { id title } } } }', variables: { after } });
+  const har = { log: { version: '1.2', entries: [
+    entry('GET', 'https://www.google-analytics.com/g/collect?v=2', { events: Array.from({ length: 60 }, (_, i) => ({ id: i, name: 'page_view', ts: i, a: 1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7 })) }),
+    entry('GET', 'https://shop.test/', '<html><body>shop</body></html>', { mime: 'text/html' }),
+    entry('GET', 'https://shop.test/api/config', { theme: 'dark', flags: { a: true } }),
+    entry('GET', `https://shop.test/api/search?q=keyboard&page=1&api_key=${SECRETS.key}`, products(1), { ...auth, encoding: 'base64' }),
+    entry('GET', `https://shop.test/api/search?q=keyboard&page=2&api_key=${SECRETS.key}`, products(6), auth),
+    entry('GET', 'https://shop.test/api/items/123456/reviews', undefined),
+    entry('POST', 'https://shop.test/graphql', posts(SECRETS.cur1), { post: gql(null) }),
+    entry('POST', 'https://shop.test/graphql', posts(SECRETS.cur2), { post: gql(SECRETS.cur1) }),
+  ] } };
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scrape-har-'));
+  const scan = (obj, args = []) => {
+    const file = path.join(tmp, 'sample.har');
+    fs.writeFileSync(file, typeof obj === 'string' ? obj : JSON.stringify(obj));
+    const r = spawnSync('node', [path.join(DIR, 'har-scan.mjs'), file, ...args], { encoding: 'utf8' });
+    let summary = {};
+    try { summary = JSON.parse((r.stdout || '').trim().split('\n').pop()); } catch { /* non-JSON */ }
+    return { summary, output: (r.stdout || '') + (r.stderr || ''), code: r.status };
+  };
+  const res = scan(har, ['--match', '39,000원']);
+  const c = res.summary.candidates || [];
+  const top = c[0] || {};
+  const g = c.find((x) => x.graphql_operation === 'Posts') || {};
+  const leaked = Object.entries(SECRETS).filter(([, v]) => res.output.includes(v) || res.output.includes(Buffer.from(v).toString('base64'))).map(([k]) => k);
+  ok('noiseRegex comes from helpers.js', noiseRegex().test('www.google-analytics.com') && !noiseRegex().test('shop.test/api/search'));
+  ok('har-scan: last stdout line is a JSON summary', res.code === 0 && res.summary.ok === true && res.summary.entries === 8, { code: res.code });
+  ok('har-scan: --match ranks the data API first', top.method === 'GET' && /shop\.test\/api\/search/.test(top.url_pattern || '') && top.match === true && res.summary.match?.found === true, top.url_pattern);
+  ok('har-scan: array path in [] grammar + item keys', top.items_path === 'data.items[]' && top.rows === 5 && eq(top.item_keys, ['id', 'title', 'price', 'url']), { path: top.items_path, keys: top.item_keys });
+  ok('har-scan: URL pattern masks page and secrets', (top.url_pattern || '').includes('page={n}') && (top.url_pattern || '').includes('api_key={secret}') && top.paging?.page_param === 'query:page' && top.calls === 2, top.url_pattern);
+  ok('har-scan: header names only, intercept for computed headers', ['authorization', 'cookie', 'x-signature', 'referer'].every((h) => (top.headers || []).includes(h)) && top.recommend?.strategy === 'intercept' && eq(top.antibot_cookies, ['_abck']), top.headers);
+  ok('har-scan: graphql cursor round-trip → http + cursor', g.paging?.cursor_param === 'body:variables.after' && g.paging?.cursor_path === 'data.posts.pageInfo.endCursor' && g.paging?.cursor_confirmed === true && g.recommend?.strategy === 'http' && g.recommend?.pages === 'cursor' && g.items_path === 'data.posts.edges[]', g.paging);
+  const tracker = c.findIndex((x) => x.noise);
+  ok('har-scan: tracker domain flagged and ranked below the real lists despite its bigger array', tracker > c.indexOf(g) && c.indexOf(g) > 0 && c[tracker].rows === 60 && !top.noise, c.map((x) => x.url_pattern));
+  ok('har-scan: missing body kept as a low candidate with {id}', c.some((x) => x.body === 'empty' && /\/api\/items\/\{id\}\/reviews$/.test(x.url_pattern) && x.items_path === null));
+  ok('har-scan: no credential value on stdout or stderr', leaked.length === 0, leaked);
+  // only a base64 body for the endpoint: it must still be decoded and ranked
+  const b64 = scan({ log: { entries: [har.log.entries[0], har.log.entries[3]] } });
+  ok('har-scan: base64 body decoded', b64.summary.candidates?.[0]?.body === 'base64' && b64.summary.candidates[0].items_path === 'data.items[]' && b64.summary.candidates[0].rows === 5, b64.summary.candidates?.[0]?.body);
+  // a sanitized export has no Cookie/Authorization at all → say so
+  const clean = scan({ log: { entries: [entry('GET', 'https://shop.test/api/search?page=1', products(1))] } });
+  ok('har-scan: sanitized HAR is called out', clean.summary.credentials_absent === true && /sanitized/.test(clean.summary.note || '') && res.summary.credentials_absent === undefined);
+  const broken = scan(`{"log":{"entries":[{"request":{"headers":[{"name":"Authorization","value":"Bearer ${SECRETS.bearer}"}]`);
+  ok('har-scan: truncated file → exit 1, no echo of its content', broken.code === 1 && broken.summary.ok === false && !broken.output.includes(SECRETS.bearer), { code: broken.code });
+  ok('har-scan: not a HAR → exit 1', scan({ hello: 1 }).code === 1);
+  fs.rmSync(tmp, { recursive: true, force: true });
+}
 
 // csvCell quoting + array join
 ok('csv plain', csvCell('abc') === 'abc');

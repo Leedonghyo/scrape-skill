@@ -153,6 +153,22 @@
         "Sample rows and a highlighted screenshot were shown and one confirmation asked before the full collection",
         "The collection was not done by scrolling the DOM and scraping rendered cards when the JSON call was usable"
       ]
+    },
+    {
+      "id": 11,
+      "prompt": "아까 네 브라우저로는 이 사이트가 계속 막힌다고 했잖아. 내 크롬에서 네가 알려준 대로 저장했어: ~/Downloads/shop.example.com.har — 여기서 상품 목록 데이터가 어디서 오는지 찾아서 수집 설정 만들어줘. 화면에는 '무선 키보드 K380'이 39,000원으로 보여",
+      "expected_output": "Runs har-scan.mjs on the file with --match set to a value the user quoted, reads the JSON summary (not the HAR itself), picks the top candidate's url_pattern / items_path / paging and its recommended strategy, verifies an http recommendation with probe-http (falling back to intercept), and writes a recipe. Never prints or copies cookie/authorization/token values; mentions the sanitized-export limitation when credentials_absent is reported; reminds the user to delete the HAR.",
+      "files": [],
+      "expectations": [
+        "scripts/har-scan.mjs was run on the HAR with --match set to a value from the user's message ('무선 키보드 K380' or '39,000원')",
+        "The HAR file itself was not dumped into the conversation (no cat/Read of the whole file, no jq over header or cookie values)",
+        "No cookie, authorization or token value from the HAR appears anywhere in the assistant's messages, commands or the recipe",
+        "The recipe's items.path and field paths come from the scanner's items_path and item_keys, and its pagination (param / cursor) from the scanner's paging block",
+        "An http recommendation was checked with probe-http.mjs before being used; a refusal led to intercept rather than to copying headers",
+        "If the summary had credentials_absent, the user was told that Chrome's default HAR is sanitized and what that means for this endpoint",
+        "The user was reminded that the HAR is sensitive and should be deleted / not shared or committed",
+        "No request-signature or token-generation logic from the site's JavaScript was reimplemented"
+      ]
     }
   ]
 }

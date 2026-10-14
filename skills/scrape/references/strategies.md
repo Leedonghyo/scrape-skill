@@ -44,6 +44,22 @@ The browser shows the JSON call, but `probe-http.mjs` on the same URL returns 40
 
 The preview for the user is still DOM-based (`extract`/`highlight` on the rendered list), as with `http`. If even the browser's own call comes back 403, the collector stops with `blocked`; continue with the block ladder in SKILL.md.
 
+### Finding the API in a HAR file
+
+When you cannot watch the network yourself (the MCP window is challenged, the data only loads in the user's logged-in Chrome), the user can save a HAR from their own browser (wording in messages.md) and you read it with the scanner instead of opening the file:
+
+```
+node scripts/har-scan.mjs <file.har> --match "<a value visible on the page>" --limit 10
+```
+
+It ranks the JSON responses (has an array of objects, array length, contains the `--match` value, not a tracker domain) and prints per candidate: method, URL pattern (`{id}` for numbers/hashes, `{n}` / `{cursor}` for paging parameters, `{secret}` for masked values), the array as an `items.path`, the first item's keys, header **names**, and a suggested strategy. Base64-encoded bodies are decoded; `body: "empty"` means Chrome did not keep that body (re-save with the Network tab open before reloading). The last stdout line is the JSON summary.
+
+- `recommend.strategy: http` is a hypothesis. Confirm it with `probe-http.mjs` as usual; refused → `intercept`.
+- `intercept` is suggested when the request carries headers the page computes (`x-signature`, nonces, sensor data) or anti-bot cookies.
+- `pages: cursor` with `cursor_confirmed: true` means a value from one response was sent back by a later request; `cursor_path` and `cursor_param` go straight into the recipe.
+- `credentials_absent: true`: the HAR has no `Cookie`/`Authorization` header at all. Chrome's default "Export HAR (sanitized)" strips them, so the scanner cannot tell whether the endpoint needs a login. Tell the user; if it matters, the unsanitized export is behind DevTools Settings → Preferences → Network → "Allow to generate HAR with sensitive data".
+- A HAR holds session cookies and tokens. Never paste its contents into the conversation, never copy a header value out of it into a recipe by hand, and remind the user to delete it afterwards. The scanner prints no header, cookie or token values.
+
 ## 3. Data embedded in the HTML (strategy `embedded`)
 
 Next.js (`<script id="__NEXT_DATA__">`), Nuxt (`window.__NUXT__`), Redux/Vuex (`window.__INITIAL_STATE__`, `__PRELOADED_STATE__`), Apollo (`__APOLLO_STATE__`), Remix (`__remixContext`), and schema.org JSON-LD all ship structured data in the first HTML response.
