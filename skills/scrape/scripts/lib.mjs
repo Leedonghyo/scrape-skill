@@ -11,6 +11,7 @@ export const SCRIPTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 export const HELPERS_PATH = path.join(SCRIPTS_DIR, 'page', 'helpers.js');
 export const SCRAPE_HOME = path.join(os.homedir(), '.scrape');
 export const PAGE_TYPES = ['single', 'urls', 'param', 'next_link', 'scroll'];
+export const STRATEGIES = ['dom', 'http', 'embedded', 'intercept'];
 export const FORMATS = ['csv', 'json', 'jsonl'];
 
 // Exit codes are part of the contract with the model that calls these scripts.
@@ -79,13 +80,14 @@ export function validateRecipe(r) {
   if (!r || typeof r !== 'object') fail('recipe must be a JSON object');
   if (r.version !== 1) fail('"version" must be 1');
   if (!r.name || !/^[a-z0-9][a-z0-9._-]*$/i.test(r.name)) fail('"name" must be a kebab-case identifier (letters, digits, - _ .)');
-  if (!['dom', 'http', 'embedded'].includes(r.strategy)) fail('"strategy" must be dom, http or embedded');
+  if (!STRATEGIES.includes(r.strategy)) fail('"strategy" must be dom, http, embedded or intercept');
+  const inBrowser = r.strategy === 'dom' || r.strategy === 'intercept'; // these two drive a real page
   const p = r.pages;
   if (!p || !PAGE_TYPES.includes(p.type)) fail(`"pages.type" must be one of ${PAGE_TYPES.join(', ')}`);
   if (p.type === 'urls' && !(Array.isArray(p.urls) && p.urls.length)) fail('"pages.urls" must be a non-empty array');
   if (['single', 'next_link', 'scroll'].includes(p.type) && !p.start) fail(`"pages.start" is required for pages.type ${p.type}`);
   if (p.type === 'next_link' && !p.next_selector) fail('"pages.next_selector" is required for pages.type next_link');
-  if (['next_link', 'scroll'].includes(p.type) && r.strategy !== 'dom') fail(`pages.type ${p.type} only works with strategy dom`);
+  if (['next_link', 'scroll'].includes(p.type) && !inBrowser) fail(`pages.type ${p.type} only works with strategy dom or intercept`);
   if (p.type === 'param') {
     const tmpl = r.strategy === 'http' ? r.http?.url_template || p.template : p.template;
     if (!tmpl || !tmpl.includes('{n}')) fail(r.strategy === 'http' ? '"http.url_template" (or "pages.template") must contain {n}' : '"pages.template" must contain {n}');
@@ -93,6 +95,11 @@ export function validateRecipe(r) {
   if (!r.fields || typeof r.fields !== 'object') fail('"fields" is required');
   if (r.strategy === 'http' && !(r.http?.url_template || p.template || p.urls || p.start)) fail('"http.url_template" is required for strategy http');
   if (r.strategy === 'embedded' && !r.embedded?.source) fail('"embedded.source" is required for strategy embedded');
+  if (r.strategy === 'intercept') {
+    const m = r.intercept?.url_match;
+    if (!m || typeof m !== 'string') fail('"intercept.url_match" (a regex tested against response URLs) is required for strategy intercept');
+    try { new RegExp(m); } catch (e) { fail(`"intercept.url_match" is not a valid regex: ${e.message}`); }
+  }
   if (r.detail) {
     if (!r.detail.url_field) fail('"detail.url_field" is required');
     if (!r.detail.fields || typeof r.detail.fields !== 'object') fail('"detail.fields" is required');

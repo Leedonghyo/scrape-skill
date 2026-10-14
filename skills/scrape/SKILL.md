@@ -45,13 +45,14 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 5. 전략을 고릅니다. 싼 것부터:
    - `overview().api_hints`나 `browser_network_requests(filter: "api|json|graphql")`에 데이터를 담은 JSON 호출이 보이면 → `browser_network_request(index)`로 열어 URL 패턴과 헤더를 적고 `probe-http.mjs <url>`. 브라우저 없이 재현되면(200, `is_json`) → 전략 **`http`**.
    - `overview().embedded`에 `next`, `window:*`, `ldjson`으로 데이터가 있고(`embeddedGet(source, path)`로 확인) `probe-http.mjs <페이지 url>`이 차단되지 않으면 → 전략 **`embedded`**.
+   - 데이터 JSON 호출이 보이는데 `probe-http.mjs`가 차단되거나 403일 때(지문 보호 API) → 전략 **`intercept`**. 수집기가 페이지를 Chrome으로 열고, 페이지가 스스로 받은 그 JSON 응답을 읽습니다. `intercept.url_match`에 호출 URL의 정규식을 적고 필드는 `http`처럼 JSON 경로로 씁니다(`references/strategies.md` §2).
    - `api_hints`가 비어 있으면 `dom`으로 가기 전에 두 가지를 먼저 합니다. (1) `await autoScroll({rounds: 2})` 또는 다음 페이지 링크를 한 번 클릭하고 `browser_network_requests`를 다시 봅니다. 서버 렌더 첫 페이지는 XHR이 없고 2페이지부터 API를 쓰는 사이트가 많습니다. (2) `probe-http.mjs <페이지 url>`의 `embedded.window_assignments`를 읽습니다. `/api/`, `?format=json` 같은 URL을 추측해서 치지는 않습니다.
    - 그 외 → **`dom`**. 사용자가 데이터를 볼 수 있으면 항상 됩니다.
 6. 필드를 매핑합니다.
    - `dom`: `overview().lists`에서 시작(가장 큰 반복 블록이 보통 데이터). 사용자가 말한 각 필드에 대해 `findByText("<화면에 보이는 예시값>")`이 정확한 요소와 `list.recipe_hint.container`, `field`를 줍니다. 각 셀렉터를 `probe(selector, { within: container })`로 확인: `count`가 항목 수와 같고 `distinct_texts`가 높아야 진짜 데이터입니다.
    - 값이 컨테이너 바깥의 다음 행에 있으면(제목 행 + 점수 행처럼 표가 2행 구조) 필드 셀렉터 앞에 `+ `를 붙입니다(`"+ .score"`). `probe("+ .score", { within: "tr.athing" })`로 개수가 항목 수와 맞는지 확인하세요. `findByText`가 엉뚱한 상위 컨테이너를 가리키면 이 경우입니다.
    - 텍스트가 아니라 아이콘으로 보이는 값(별점, 재고 배지, 플래그)은 텍스트로 못 찾습니다. `overview().lists[].fields`나 스냅샷에서 요소를 잡으세요. `probe`가 서로 다른 `classes`를 보여주고, 레시피는 `attr: "class"` + `regex` + `map`으로 읽습니다(예: `"Three"` → `3`).
-   - `http`/`embedded`: JSON에서 배열(`items.path`)과 행별 경로를 찾습니다. `embeddedGet`과 네트워크 응답 본문이 그걸 보는 창입니다.
+   - `http`/`embedded`/`intercept`: JSON에서 배열(`items.path`)과 행별 경로를 찾습니다. `embeddedGet`과 네트워크 응답 본문이 그걸 보는 창입니다.
    - 항목 URL이 있으면 열로 넣으세요. 자연스러운 `dedupe_key`이고 사용자도 링크를 좋아합니다.
    안정적인 셀렉터(`id`, `data-testid`, 의미 있는 class)를 위치 기반보다 우선하세요. 헬퍼는 이미 해시 class를 피합니다.
 7. 사용자에게 말하기 **전에** 두 번째 페이지(2페이지 또는 다른 항목의 상세 페이지)를 같은 매핑으로 확인하세요. 그래야 확인 메시지에 "1·2페이지에서 검증했다"고 적을 수 있습니다. 가장 흔한 실패는 첫 페이지에서만 맞는 매핑입니다.
@@ -60,7 +61,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 설명하지 말고 보여주세요:
 
-1. `extract(fields, container)` → 처음 5행을 사용자의 필드명으로 마크다운 표로. `fields` 형식: 문자열이면 셀렉터, 객체면 `{selector, attr, regex, map, transform, all, join}`(http/embedded 레시피에서는 `path`). `extract`·`highlight`는 DOM 전용이므로 `http`/`embedded` 전략에서는 미리보기·스크린샷용 DOM 셀렉터를 따로 하나 잡으세요. 레시피는 JSON 경로로, 확인은 DOM으로.
+1. `extract(fields, container)` → 처음 5행을 사용자의 필드명으로 마크다운 표로. `fields` 형식: 문자열이면 셀렉터, 객체면 `{selector, attr, regex, map, transform, all, join}`(http/embedded 레시피에서는 `path`). `extract`·`highlight`는 DOM 전용이므로 `http`/`embedded`/`intercept` 전략에서는 미리보기·스크린샷용 DOM 셀렉터를 따로 하나 잡으세요. 레시피는 JSON 경로로, 확인은 DOM으로.
 2. `highlight(fields, { container, limit: 4 })` → `browser_take_screenshot`(`filename`은 `.playwright-mcp/<이름>.png`처럼 작업 디렉토리 아래로만 지정. 그 밖의 경로는 "outside allowed roots"로 거부되니, 다른 곳이 필요하면 저장 후 복사) → 보여주기 → `clearHighlight()`. `browser_evaluate`·`browser_snapshot`의 `filename`도 같은 제한입니다.
 3. 질문 하나: "이게 원하시는 데이터가 맞나요? 빠진 게 있나요?" 사용자의 언어로. 규모 추정과 2페이지 검증 결과를 같은 메시지에 넣어 추가 턴이 없게 하세요.
 
@@ -68,7 +69,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 ### 3. 범위와 기대치
 
-`pagination()`으로 규모를 추정: 페이지당 항목 × 페이지 수(마지막 페이지 번호가 보이면) 또는 "모름". 사용자가 범위를 이미 말했으면('전부', '첫 페이지만', '10페이지') 묻지 않고 추정치만 확인 메시지에 적습니다. 범위는 클 때(10페이지 초과 또는 200행 초과)나 모를 때만 묻습니다: "60페이지 약 1,200건, 5분쯤 걸려요. 전부 할까요, 최근 200건만 할까요?" 그 외엔 `max_pages` 20으로 그냥 진행하고 그렇게 말하세요. 예상 시간을 말하세요: 페이지당 대략 `delay_ms` + 0.5초(기본 속도 `dom` ≈ 1.5~2초/페이지, `http` ≈ 1초/페이지), 상세 페이지도 건당 같은 만큼.
+`pagination()`으로 규모를 추정: 페이지당 항목 × 페이지 수(마지막 페이지 번호가 보이면) 또는 "모름". 사용자가 범위를 이미 말했으면('전부', '첫 페이지만', '10페이지') 묻지 않고 추정치만 확인 메시지에 적습니다. 범위는 클 때(10페이지 초과 또는 200행 초과)나 모를 때만 묻습니다: "60페이지 약 1,200건, 5분쯤 걸려요. 전부 할까요, 최근 200건만 할까요?" 그 외엔 `max_pages` 20으로 그냥 진행하고 그렇게 말하세요. 예상 시간을 말하세요: 페이지당 대략 `delay_ms` + 0.5초(기본 속도 `dom`·`intercept` ≈ 1.5~2초/페이지, `http` ≈ 1초/페이지), 상세 페이지도 건당 같은 만큼.
 
 ### 4. 레시피와 수집
 
@@ -156,4 +157,4 @@ node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <k
 
 파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.
 
-필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `examples/`(동작하는 레시피).
+필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `examples/`(동작하는 레시피).

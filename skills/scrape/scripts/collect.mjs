@@ -10,13 +10,14 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import {
   SCRIPTS_DIR, HELPERS_PATH, SCRAPE_HOME, FORMATS,
   UsageError, EnvError, BlockedError,
   expandHome, sleep, isEmpty, hasAnyValue, shorten, localDate, jittered, parseArgs, loadRecipe,
   defaultHeaders, mergeHeaders, loadStorageState, cookieHeader, detectBlockedHttp,
-  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns,
+  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse,
 } from './lib.mjs';
 
 const USAGE = `usage: node collect.mjs <recipe.json | recipe-name> [--max-pages N] [--limit N] [--dry-run] [--out PATH]
@@ -27,6 +28,8 @@ A bare name resolves to ~/.scrape/recipes/<name>.json.
 const ARGS = { 'max-pages': 'number', limit: 'number', 'dry-run': 'boolean', out: 'string', format: 'string', headless: 'boolean', headful: 'boolean', resume: 'boolean', 'wait-for-human': 'boolean', cdp: 'string', quiet: 'boolean', help: 'boolean' };
 const NAV_TIMEOUT = 45_000;
 const HUMAN_WAIT_MS = 5 * 60_000;
+const INTERCEPT_TIMEOUT = 10_000; // default intercept.timeout_ms
+const INTERCEPT_SETTLE_MS = 400;  // a page may fire the call more than once; wait until it goes quiet
 // Block kinds a person can actually clear by acting in the browser window. Everything else (access_denied,
 // rate_limited, bot_page) is a hard refusal that waiting cannot change.
 const SOLVABLE_BY_HUMAN = new Set(['js_challenge', 'turnstile', 'captcha', 'login_required']);
@@ -67,6 +70,8 @@ class Collector {
     this.blockedBy = null;
     this.error = null;
     this.cursor = null;    // cursor of the page being fetched (saved on block so --resume retries it)
+    this.intercepted = new Set(); // strategy intercept: url + body hash of every response already used
+    this.responses = 0;    // strategy intercept: JSON responses captured and used
     this.session = loadStorageState(recipe.session?.cookies_file);
     this.t0 = Date.now();
   }
@@ -233,28 +238,39 @@ class Collector {
   async runScroll(maxRounds) {
     const page = await this.page();
     await this.pause();
-    await this.navigate(page, this.pages.start, this.recipe.wait);
-    const container = this.recipe.items?.container || null;
-    const count = () => page.evaluate((c) => (c ? document.querySelectorAll(c).length : (document.scrollingElement || document.documentElement).scrollHeight), container);
-    const idle = this.pages.idle_ms ?? 1500;
-    let last = await count();
-    let stale = 0;
-    for (let round = 1; round <= maxRounds && !this.aborted; round++) {
-      const clicked = this.pages.load_more_selector
-        ? await page.evaluate((s) => { const b = document.querySelector(s); if (!b) return false; b.scrollIntoView({ block: 'center' }); b.click(); return true; }, this.pages.load_more_selector)
-        : false;
-      if (!clicked) await page.evaluate(() => window.scrollTo(0, (document.scrollingElement || document.documentElement).scrollHeight));
-      await sleep(idle);
-      const now = await count();
-      this.pagesDone = round;
-      this.log(`scroll round ${round}/${maxRounds} → ${now} ${container ? 'items' : 'px'}`);
-      if (now <= last && ++stale >= 2) { this.stop = 'scroll_idle'; break; } // one grace round for slow loaders
-      if (now > last) stale = 0;
-      last = now;
-    }
-    if (this.aborted) this.stop = 'interrupted';
-    if (!this.stop) this.stop = 'max_pages';
-    const rows = await this.extractDom(page, this.recipe.fields, container);
+    // intercept: growth is measured in captured API responses instead of DOM items; the listener goes on before the navigation.
+    const cap = this.recipe.strategy === 'intercept' ? this.capture(page) : null;
+    const hits = [];
+    let rows;
+    try {
+      await this.navigate(page, this.pages.start, this.recipe.wait);
+      if (cap) hits.push(...await this.settle(cap, page));
+      const container = this.recipe.items?.container || null;
+      const count = async () => {
+        if (cap) { hits.push(...await this.settle(cap, page, false)); return hits.length; }
+        return page.evaluate((c) => (c ? document.querySelectorAll(c).length : (document.scrollingElement || document.documentElement).scrollHeight), container);
+      };
+      const idle = this.pages.idle_ms ?? 1500;
+      let last = await count();
+      let stale = 0;
+      for (let round = 1; round <= maxRounds && !this.aborted; round++) {
+        const clicked = this.pages.load_more_selector
+          ? await page.evaluate((s) => { const b = document.querySelector(s); if (!b) return false; b.scrollIntoView({ block: 'center' }); b.click(); return true; }, this.pages.load_more_selector)
+          : false;
+        if (!clicked) await page.evaluate(() => window.scrollTo(0, (document.scrollingElement || document.documentElement).scrollHeight));
+        await sleep(idle);
+        const now = await count();
+        this.pagesDone = round;
+        this.log(`scroll round ${round}/${maxRounds} → ${now} ${cap ? 'responses' : container ? 'items' : 'px'}`);
+        if (now <= last && ++stale >= 2) { this.stop = 'scroll_idle'; break; } // one grace round for slow loaders
+        if (now > last) stale = 0;
+        last = now;
+      }
+      if (this.aborted) this.stop = 'interrupted';
+      if (!this.stop) this.stop = 'max_pages';
+      if (cap && !hits.length) this.stop = 'empty_page'; // nothing matched intercept.url_match at all
+      rows = cap ? this.hitRows(hits) : await this.extractDom(page, this.recipe.fields, container);
+    } finally { cap?.stop(); }
     const kept = await this.acceptRows(rows);
     this.log(`extracted ${kept.length} rows after scrolling`);
     this.flush();
@@ -264,34 +280,98 @@ class Collector {
 
   // ---------- one page → rows ----------
   async fetchPage(target, pause) {
-    if (this.recipe.strategy === 'dom') return this.domPage(target, pause);
+    if (this.recipe.strategy === 'dom' || this.recipe.strategy === 'intercept') return this.domPage(target, pause);
     return this.jsonPage(target, pause);
   }
 
   async domPage(target, pause) {
     const page = await this.page();
     if (pause) await this.pause();
-    if (target.click) {
-      // "next" is a button, not a link: click it and give the page time to swap content or navigate.
-      await page.locator(this.pages.next_selector).first().click({ timeout: 10_000 });
-      await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-      await this.inject(page);
-      await this.guard(page);
-      await this.applyWait(page, this.recipe.wait);
-    } else await this.navigate(page, target.url, this.recipe.wait);
-    const rows = await this.extractDom(page, this.recipe.fields, this.recipe.items?.container);
-    let next = null;
-    if (this.pages.type === 'next_link') {
-      next = await page.evaluate((sel) => {
-        const a = document.querySelector(sel);
-        if (!a) return null;
-        const href = a.getAttribute('href');
-        if (href && !/^(#|javascript:)/i.test(href.trim())) return { url: new URL(href, location.href).href };
-        return { click: true };
-      }, this.pages.next_selector);
-    }
-    return { rows, next, pageUrl: page.url() };
+    // intercept: the listener must exist before the navigation or click that makes the page call its API.
+    const cap = this.recipe.strategy === 'intercept' ? this.capture(page) : null;
+    try {
+      if (target.click) {
+        // "next" is a button, not a link: click it and give the page time to swap content or navigate.
+        await page.locator(this.pages.next_selector).first().click({ timeout: 10_000 });
+        await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
+        await this.inject(page);
+        await this.guard(page);
+        await this.applyWait(page, this.recipe.wait);
+      } else await this.navigate(page, target.url, this.recipe.wait);
+      const rows = cap ? this.hitRows(await this.settle(cap, page)) : await this.extractDom(page, this.recipe.fields, this.recipe.items?.container);
+      let next = null;
+      if (this.pages.type === 'next_link') {
+        next = await page.evaluate((sel) => {
+          const a = document.querySelector(sel);
+          if (!a) return null;
+          const href = a.getAttribute('href');
+          if (href && !/^(#|javascript:)/i.test(href.trim())) return { url: new URL(href, location.href).href };
+          return { click: true };
+        }, this.pages.next_selector);
+      }
+      return { rows, next, pageUrl: page.url() };
+    } finally { cap?.stop(); }
   }
+
+  // ---------- intercept: rows from the JSON the page itself fetches ----------
+  // The API answers the real browser (right TLS/HTTP fingerprint, cookies, tokens the page computes) even when
+  // a bare HTTP client gets a 403, so we read the response the page already received instead of re-requesting it.
+  // Nothing is replayed, signed or forged here. Kept: URL matches intercept.url_match, method matches when given,
+  // content-type is JSON, and the same URL + body was not already used in this run.
+  capture(page) {
+    const ic = this.recipe.intercept;
+    const re = new RegExp(ic.url_match);
+    const method = ic.method ? String(ic.method).toUpperCase() : null;
+    const cap = { hits: [], matched: 0, pending: new Set(), denied: null };
+    const onResponse = (resp) => {
+      const url = resp.url();
+      if (!re.test(url)) return;
+      if (method && resp.request().method().toUpperCase() !== method) return;
+      const status = resp.status();
+      const headers = resp.headers();
+      if (status === 403 || status === 429) { cap.matched++; cap.denied = cap.denied || { status, url, headers }; return; }
+      if (!/json/i.test(headers['content-type'] || '')) return;
+      const seq = cap.matched++;
+      const p = resp.text().then((text) => {
+        const data = tryParse(text);
+        if (data === undefined) return;
+        const key = url + '\n' + createHash('sha1').update(text).digest('hex');
+        if (this.intercepted.has(key)) return;
+        this.intercepted.add(key);
+        cap.hits.push({ seq, url, data });
+      }, () => { /* body gone: the page navigated away mid-read */ }).finally(() => cap.pending.delete(p));
+      cap.pending.add(p);
+    };
+    page.on('response', onResponse);
+    cap.stop = () => page.off('response', onResponse);
+    return cap;
+  }
+
+  // New responses since the last call, in arrival order. waitFirst: give the page intercept.timeout_ms to make
+  // the call at all, then wait until no further matching response shows up for a moment.
+  async settle(cap, page, waitFirst = true) {
+    const timeout = this.recipe.intercept.timeout_ms ?? INTERCEPT_TIMEOUT;
+    if (waitFirst) {
+      const deadline = Date.now() + timeout;
+      while (!cap.matched && Date.now() < deadline && !this.aborted) await sleep(100);
+      for (let n = -1; n !== cap.matched && Date.now() < deadline + INTERCEPT_SETTLE_MS;) { n = cap.matched; await sleep(INTERCEPT_SETTLE_MS); }
+    }
+    await Promise.race([Promise.allSettled([...cap.pending]), sleep(5000)]);
+    const hits = cap.hits.splice(0).sort((a, b) => a.seq - b.seq);
+    const denied = cap.denied;
+    cap.denied = null;
+    if (!hits.length && denied) {
+      // The API refused the browser itself (403/429). That is a block, not an empty page.
+      const b = detectBlockedHttp(denied.status, denied.headers, '');
+      throw new BlockedError('blocked', { vendor: b.vendor, kind: b.kind, url: denied.url, status: denied.status, signals: [...b.signals, 'intercepted API response'] });
+    }
+    if (waitFirst && !cap.matched) this.log(`no JSON response matched intercept.url_match within ${timeout} ms on ${shorten(page.url(), 80)}`);
+    cap.matched = 0;
+    this.responses += hits.length;
+    return hits;
+  }
+
+  hitRows(hits) { return hits.flatMap((h) => jsonRows(h.data, this.recipe.items, this.recipe.fields)); }
 
   async jsonPage(target, pause) {
     if (pause) await this.pause();
@@ -505,6 +585,7 @@ class Collector {
       elapsed_ms: Date.now() - this.t0,
       stopped_reason: this.stop,
     };
+    if (this.recipe.strategy === 'intercept') out.intercepted = this.responses;
     if (this.previousRows) out.rows_previous = this.previousRows;
     if (this.blockedBy) {
       out.blocked_by = this.blockedBy;

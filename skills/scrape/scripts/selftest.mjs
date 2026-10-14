@@ -4,25 +4,65 @@
  *
  *   node selftest.mjs            # offline unit tests + live example-recipe runs
  *   node selftest.mjs --offline  # offline unit tests only (no network/browser)
+ *   node selftest.mjs --serve    # only run the local fixture server on http://127.0.0.1:8765 (for examples/local-*.json)
  *
  * Offline tests cover the pure logic that extraction/output depend on (path grammar, field
  * transforms incl. map/regex, JSON rows, embedded-JSON sources, block detection, cookies, CSV).
  * Live tests run the bundled example recipes against the public sandbox sites and assert row
- * counts, so a change that breaks dom/http/embedded/detail/scroll collection is caught. Exit 0
- * only if every test passes.
+ * counts, so a change that breaks dom/http/embedded/detail/scroll collection is caught. The
+ * examples/local-*.json recipes run against a fixture server started here with node:http (the
+ * sandbox sites have no fingerprint-protected API). Exit 0 only if every test passes.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
-  csvCell, cookieHeader, unionColumns, fillRate, parseArgs, UsageError,
+  csvCell, cookieHeader, unionColumns, fillRate, parseArgs, validateRecipe, UsageError,
 } from './lib.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
+const EXAMPLES = path.join(DIR, '..', 'examples');
+const FIXTURE_ORIGIN = 'http://127.0.0.1:8765'; // what examples/local-*.json point at; live tests swap in the real port
 const offline = process.argv.includes('--offline');
+
+// ---------- local fixture server ----------
+// /shop?page=N renders a list by fetching /api/search?page=N. The API refuses anything whose user-agent
+// does not say "Chrome" (a stand-in for fingerprint protection: a bare HTTP client gets 403, the page gets JSON).
+function fixtureServer(port = 0) {
+  const PRODUCTS = Array.from({ length: 15 }, (_, i) => ({ id: i + 1, title: `상품 ${i + 1}`, price: `${(i + 1) * 1000}원` }));
+  const send = (res, status, type, body) => { res.writeHead(status, { 'content-type': type }); res.end(body); };
+  const json = (res, status, obj) => send(res, status, 'application/json; charset=utf-8', JSON.stringify(obj));
+  const shopHtml = (api) => `<!doctype html><html lang="ko"><head><meta charset="utf-8"><title>Fixture shop</title></head><body>
+<h1>Fixture shop</h1><ul id="list"></ul>
+<script>
+  const page = new URLSearchParams(location.search).get('page') || '1';
+  fetch('${api}?page=' + page).then((r) => r.json()).then((d) => {
+    for (const it of (d.data && d.data.items) || []) { const li = document.createElement('li'); li.className = 'item'; li.textContent = it.title + ' ' + it.price; document.getElementById('list').appendChild(li); }
+  }).catch(() => {});
+</script></body></html>`;
+  const server = http.createServer((req, res) => {
+    const u = new URL(req.url, 'http://x');
+    if (u.pathname === '/shop') return send(res, 200, 'text/html; charset=utf-8', shopHtml('/api/search'));
+    if (u.pathname === '/refused') return send(res, 200, 'text/html; charset=utf-8', shopHtml('/api/refused'));
+    if (u.pathname === '/api/search') {
+      if (!/Chrome/.test(req.headers['user-agent'] || '')) return json(res, 403, { error: 'browsers only' });
+      const n = Number(u.searchParams.get('page') || 1);
+      return json(res, 200, { data: { items: PRODUCTS.slice((n - 1) * 5, n * 5) } });
+    }
+    if (u.pathname === '/api/refused') return json(res, 403, { error: 'no' });
+    return send(res, 404, 'text/plain', 'not found');
+  });
+  return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, origin: `http://127.0.0.1:${server.address().port}` })));
+}
+if (process.argv.includes('--serve')) {
+  const { origin } = await fixtureServer(Number(new URL(FIXTURE_ORIGIN).port));
+  console.error(`[selftest] fixture server on ${origin} — try: node collect.mjs ../examples/local-intercept.json --dry-run  (Ctrl-C to stop)`);
+  await new Promise(() => {});
+}
 let pass = 0, fail = 0;
 const fails = [];
 const eq = (a, b) => JSON.stringify(a) === JSON.stringify(b);
@@ -63,6 +103,18 @@ ok('embedded window json', eq(extractEmbedded('<script>window.__S = {"a":[1,2]};
 ok('embedded regex', eq(extractEmbedded('<script>var data = [{"t":"x"}];</script>', { regex: 'var data = (\\[[\\s\\S]*?\\]);' }), [{ t: 'x' }]));
 throws('embedded window JS-literal rejected', () => extractEmbedded('<script>window.__S = {a:1};</script>', 'window:__S'));
 
+// validateRecipe: every bundled example stays valid; intercept needs a usable url_match
+for (const f of fs.readdirSync(EXAMPLES).filter((x) => x.endsWith('.json'))) {
+  let err = null;
+  try { validateRecipe(JSON.parse(fs.readFileSync(path.join(EXAMPLES, f), 'utf8'))); } catch (e) { err = e.message; }
+  ok(`example ${f} validates`, err === null, err);
+}
+const icRecipe = (over) => ({ version: 1, name: 'x', strategy: 'intercept', pages: { type: 'single', start: 'https://a.test/' }, intercept: { url_match: '/api/' }, fields: {}, ...over });
+ok('validate intercept ok', (() => { try { validateRecipe(icRecipe()); validateRecipe(icRecipe({ pages: { type: 'scroll', start: 'https://a.test/' } })); return true; } catch { return false; } })());
+throws('validate intercept needs url_match', () => validateRecipe(icRecipe({ intercept: {} })));
+throws('validate intercept bad regex', () => validateRecipe(icRecipe({ intercept: { url_match: '(' } })));
+throws('validate next_link still not for http', () => validateRecipe({ version: 1, name: 'x', strategy: 'http', pages: { type: 'next_link', start: 'https://a.test/', next_selector: 'a' }, fields: {} }));
+
 // csvCell quoting + array join
 ok('csv plain', csvCell('abc') === 'abc');
 ok('csv quote comma', csvCell('a,b') === '"a,b"');
@@ -94,28 +146,53 @@ console.error(`[selftest] offline: ${pass} passed, ${fail} failed`);
 if (!offline) {
   console.error('[selftest] live example-recipe runs (use --offline to skip)');
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'scrape-selftest-'));
-  const run = (recipe, args) => {
-    const out = path.join(tmp, `${recipe}.csv`);
-    fs.rmSync(path.join(os.homedir(), '.scrape', 'state', `${recipe}.json`), { force: true });
-    const r = spawnSync('node', [path.join(DIR, 'collect.mjs'), path.join(DIR, '..', 'examples', `${recipe}.json`), '--headless', '--quiet', '--out', out, ...args], { encoding: 'utf8', timeout: 180000 });
-    const last = (r.stdout || '').trim().split('\n').filter(Boolean).pop();
-    let summary = {};
-    try { summary = JSON.parse(last); } catch { /* non-JSON */ }
-    return { summary, out, stderr: r.stderr };
+  const fixture = await fixtureServer();
+  // Async spawn, not spawnSync: the fixture server lives in this process and must keep answering while the collector runs.
+  const run = (recipeFile, args) => new Promise((resolve) => {
+    const name = JSON.parse(fs.readFileSync(recipeFile, 'utf8')).name;
+    const out = path.join(tmp, `${name}.csv`);
+    fs.rmSync(path.join(os.homedir(), '.scrape', 'state', `${name}.json`), { force: true });
+    const child = spawn('node', [path.join(DIR, 'collect.mjs'), recipeFile, '--headless', '--quiet', '--out', out, ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
+    let stdout = '', stderr = '';
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    const timer = setTimeout(() => child.kill('SIGTERM'), 180000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      let summary = {};
+      try { summary = JSON.parse(stdout.trim().split('\n').filter(Boolean).pop()); } catch { /* non-JSON */ }
+      resolve({ summary, out, stderr, code });
+    });
+  });
+  const example = (name) => path.join(EXAMPLES, `${name}.json`);
+  // examples/local-*.json point at FIXTURE_ORIGIN; rewrite to the port the fixture really got.
+  const local = (recipe) => {
+    const text = typeof recipe === 'string' ? fs.readFileSync(example(recipe), 'utf8') : JSON.stringify(recipe);
+    const file = path.join(tmp, `${typeof recipe === 'string' ? recipe : recipe.name}.recipe.json`);
+    fs.writeFileSync(file, text.replaceAll(FIXTURE_ORIGIN, fixture.origin));
+    return file;
   };
   const live = [
-    ['books-dom', ['--max-pages', '2'], 40, (s) => s.fill_rate && s.fill_rate.rating === 1],
-    ['quotes-http', ['--max-pages', '15'], 100, (s) => s.stopped_reason === 'empty_page'],
-    ['quotes-embedded', ['--max-pages', '2'], 20, () => true],
-    ['books-detail', ['--max-pages', '1'], 20, (s) => s.fill_rate && s.fill_rate.description > 0],
-    ['quotes-scroll', ['--max-pages', '2'], 20, () => true],
+    ['books-dom', example('books-dom'), ['--max-pages', '2'], 40, (s) => s.fill_rate && s.fill_rate.rating === 1],
+    ['quotes-http', example('quotes-http'), ['--max-pages', '15'], 100, (s) => s.stopped_reason === 'empty_page'],
+    ['quotes-embedded', example('quotes-embedded'), ['--max-pages', '2'], 20, () => true],
+    ['books-detail', example('books-detail'), ['--max-pages', '1'], 20, (s) => s.fill_rate && s.fill_rate.description > 0],
+    ['quotes-scroll', example('quotes-scroll'), ['--max-pages', '2'], 20, () => true],
+    // intercept: 3 pages x 5 rows from the JSON the page fetched, numbers parsed, page 4 empty ends the run
+    ['local-intercept', local('local-intercept'), [], 15, (s) => s.rows === 15 && s.stopped_reason === 'empty_page' && s.intercepted === 4 && s.sample[0]['가격'] === 1000 && s.fill_rate['제목'] === 1],
   ];
-  for (const [recipe, args, minRows, extra] of live) {
-    let res;
-    try { res = run(recipe, args); } catch (e) { ok(`live ${recipe}`, false, String(e.message)); continue; }
+  for (const [recipe, file, args, minRows, extra] of live) {
+    const res = await run(file, args);
     const s = res.summary;
     ok(`live ${recipe}: ok & >=${minRows} rows & fields match`, !!s.ok && s.rows >= minRows && extra(s), { ok: s.ok, rows: s.rows, stopped: s.stopped_reason });
   }
+  // The fixture API really is closed to a bare HTTP client, so intercept above was not just http in disguise.
+  const bare = await fetch(`${fixture.origin}/api/search?page=1`, { headers: { 'user-agent': 'node' } });
+  ok('fixture API refuses a non-browser client', bare.status === 403, bare.status);
+  // intercept: the API refusing the browser itself is a block (exit 3), not an empty page
+  const refused = await run(local({ version: 1, name: 'local-intercept-refused', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/refused` }, intercept: { url_match: '/api/refused', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id' } }), []);
+  ok('live intercept: refused API → blocked, exit 3', refused.code === 3 && refused.summary.stopped_reason === 'blocked' && refused.summary.blocked_by?.status === 403, { code: refused.code, stopped: refused.summary.stopped_reason });
+  fixture.server.close();
   // write-csv.mjs roundtrip with dedupe
   const rowsFile = path.join(tmp, 'rows.json');
   fs.writeFileSync(rowsFile, JSON.stringify([{ id: '1', n: 10 }, { id: '2', n: 20 }, { id: '2', n: 20 }]));
