@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "name": "local-intercept",
+  "source": "http://127.0.0.1:8765/shop",
+  "strategy": "intercept",
+  "pages": { "type": "param", "template": "http://127.0.0.1:8765/shop?page={n}", "start_n": 1, "max_pages": 10 },
+  "intercept": { "url_match": "/api/search", "method": "GET", "timeout_ms": 5000 },
+  "items": { "path": "data.items[]" },
+  "fields": {
+    "id": "id",
+    "제목": "title",
+    "가격": { "path": "price", "transform": "number" }
+  },
+  "rate": { "delay_ms": 300, "jitter_ms": 100 },
+  "output": { "format": "csv", "dedupe_key": "id" },
+  "notes": "Example: the page renders its list from /api/search, which answers 403 to anything that is not a browser (probe-http style requests fail). The collector opens each page in Chrome and reads the JSON the page itself received. Page 4 returns an empty items array, which ends the run. Runs against the fixture server: `node scripts/selftest.mjs --serve` (selftest itself starts the server on a free port and rewrites these URLs)."
+}

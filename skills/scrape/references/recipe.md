@@ -32,15 +32,16 @@ Keep recipes boring and explicit. A recipe the model can read back and explain i
 | `version` | yes | always `1` |
 | `name` | yes | kebab-case; used for file names (`~/Downloads/<name>-<date>.csv`, state, sessions) |
 | `source` | yes | the URL the user gave; for humans |
-| `strategy` | yes | `dom` (real browser, CSS selectors), `http` (fetch a JSON endpoint directly), `embedded` (fetch HTML, parse JSON the page ships) |
+| `strategy` | yes | `dom` (real browser, CSS selectors), `http` (fetch a JSON endpoint directly), `embedded` (fetch HTML, parse JSON the page ships), `intercept` (real browser, read the JSON responses the page itself fetches) |
 | `pages` | yes | how to enumerate pages (below) |
 | `items` | no | how to split a page into rows (below). Omit for one row per page |
 | `fields` | yes | column definitions (below) |
 | `detail` | no | follow a per-row link and extract more columns from the detail page |
-| `wait` | no | `dom` only: `{ "selector": css, "timeout_ms": 15000 }` or `{ "network_idle": true }`. A timeout does not abort: the collector logs it, re-checks for a block, and extracts what is there |
+| `wait` | no | `dom`/`intercept` only: `{ "selector": css, "timeout_ms": 15000 }` or `{ "network_idle": true }`. A timeout does not abort: the collector logs it, re-checks for a block, and extracts what is there |
 | `session` | no | `{ "cookies_file": "~/.scrape/sessions/<name>.json", "headers": {...} }` |
 | `rate` | no | `{ "delay_ms": 1500, "jitter_ms": 500, "concurrency": 1 }` (defaults shown). The pause happens before every request, detail pages included. `concurrency` > 1 only for `http` with `param`/`urls` |
 | `http` | `http` only | `{ "url_template": "...{n}...", "method": "GET", "headers": {...}, "body": null }`. `url_template` is where `{n}` goes; `pages` then only carries `type: "param"`, `start_n`, `max_pages` |
+| `intercept` | `intercept` only | `{ "url_match": "/api/search", "method": "GET", "timeout_ms": 10000 }`. `url_match` is a regex tested against each response URL; `method` (optional) narrows it; only JSON content-types count. `timeout_ms` (default 10000) is how long each page gets to make the call — see "Intercept" |
 | `embedded` | `embedded` only | `{ "source": "next" \| "ldjson" \| "window:NAME" \| { "regex": "...", "flags": "" } }` — see "Embedded sources" |
 | `output` | no | `{ "format": "csv" \| "json" \| "jsonl", "path": "~/Downloads/{name}-{date}.csv", "dedupe_key": "url" }`. A `--out` path with `.json`/`.jsonl`/`.csv` sets the format by extension. `{date}` is the local calendar date (YYYYMMDD), not UTC |
 | `notes` | no | free text: why this strategy, what to watch for, decisions the user made (robots.txt etc.) |
@@ -54,19 +55,19 @@ When the collector stops on a block or login it writes `blocked_by: { vendor, ki
 | `single` | `start` | one page |
 | `urls` | `urls: [...]` | explicit list |
 | `param` | `template` with `{n}` (dom/embedded; for `http` use `http.url_template`), `start_n` (default 1), `step` (default 1), `max_pages` | `https://site/list?page={n}` or `https://site/catalogue/page-{n}.html` |
-| `next_link` | `start`, `next_selector`, `max_pages` | `dom` only; follows (or clicks, when it is a button) the next element until it disappears |
-| `scroll` | `start`, `max_rounds` (default 20), `idle_ms` (default 1500), `load_more_selector` (optional) | `dom` only; scrolls to the bottom (or clicks "load more") until the item count stops growing (`stopped_reason: scroll_idle`). `--max-pages` overrides `max_rounds`; `pages_done` reports rounds |
+| `next_link` | `start`, `next_selector`, `max_pages` | `dom`/`intercept` only; follows (or clicks, when it is a button) the next element until it disappears |
+| `scroll` | `start`, `max_rounds` (default 20), `idle_ms` (default 1500), `load_more_selector` (optional) | `dom`/`intercept` only; scrolls to the bottom (or clicks "load more") until the item count (for `intercept`: the number of captured responses) stops growing (`stopped_reason: scroll_idle`). `--max-pages` overrides `max_rounds`; `pages_done` reports rounds |
 
 Every type stops on an empty page (`stop_when_empty`, default true). "Empty" means zero rows after dedupe (`stopped_reason: empty_page` or `all_duplicates`). For `param`, an HTTP 404/410 counts as empty so numbered pagination ends cleanly; other non-2xx statuses are errors. `max_pages` defaults to 20 so a first run never surprises anyone. The CLI flag `--max-pages N` overrides the recipe's `max_pages` for that run.
 
 ## `items`
 
 - `dom`: `{ "container": "article.product_pod" }`. Each match is one row; field selectors are evaluated inside it.
-- `http` / `embedded`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array). Each element is one row. With `fields: {}` the row keeps its own top-level keys.
+- `http` / `embedded` / `intercept`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array). Each element is one row. With `fields: {}` the row keeps its own top-level keys.
 
 ## `fields`
 
-A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` for `http`/`embedded` (`selector` is accepted as an alias of `path` there). Field names may be in the user's language (`제목`, `가격`); they become the CSV header verbatim, in recipe order.
+A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` for `http`/`embedded`/`intercept` (`selector` is accepted as an alias of `path` there). Field names may be in the user's language (`제목`, `가격`); they become the CSV header verbatim, in recipe order.
 
 | key | strategy | meaning |
 |---|---|---|
@@ -74,7 +75,7 @@ A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` fo
 | `attr` | dom | `text` (default), `html`, or an attribute name (`href`, `src`, `title`, `datetime`, `data-price`…). `href`/`src` are made absolute unless `absolute: false` |
 | `all` | dom | `true` → array of every match instead of the first (arrays are written as `a \| b \| c` in CSV) |
 | `join` | dom | with `all`: join the matches into one string, e.g. `"join": "\n\n"` for article paragraphs (`"[data-testid=body] p"`), which also skips ads and widgets that are not `<p>` |
-| `path` | http/embedded | path inside the row object |
+| `path` | http/embedded/intercept | path inside the row object |
 | `regex` | both | applied to the string value; first capture group wins, else whole match |
 | `map` | both | `{ "One": 1, "Two": 2, … }` — replaces the value after `regex`; unknown values pass through. Star ratings in class names, status words, "Y"/"N" flags |
 | `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim` |
@@ -100,6 +101,24 @@ Prefer selectors in this order: `data-testid`/`id` > semantic tag + meaningful c
 
 The collector visits each row's `url_field` (respecting `rate`) and merges the extra columns; a detail value overrides a list value of the same name unless it is empty. `max_items` caps detail visits per run (dry runs visit at most 3). Detail pages are fetched with the browser even when the list came from `http`, unless `detail.strategy` is `"embedded"` (then `detail.embedded.source`, falling back to the top-level `embedded.source`, and optional `detail.items.path`).
 
+## Intercept
+
+```json
+"strategy": "intercept",
+"pages": { "type": "param", "template": "https://site/search?page={n}", "max_pages": 20 },
+"intercept": { "url_match": "/api/search", "method": "GET" },
+"items": { "path": "data.items[]" },
+"fields": { "제목": "title", "가격": { "path": "price", "transform": "number" } }
+```
+
+`pages` describes the *pages the browser opens* (`single`, `urls`, `param`, `next_link`, `scroll`), exactly as for `dom`; `items` and `fields` describe the *JSON the page receives*, exactly as for `http`. The collector starts listening before each navigation or click, keeps every JSON response whose URL matches `url_match`, and maps each one with `items.path` and `fields`. Details:
+
+- A page that makes the call several times (filters, lazy sections) contributes all of them; a response with the same URL and the same body as an earlier one in the run is ignored.
+- No matching response within `timeout_ms` = zero rows for that page, so the usual `empty_page` stop applies. The summary line carries `intercepted` (responses used); `0` there means `url_match` is wrong or the page did not call the API.
+- A matching response with status 403/429 and no usable one beside it is reported as a block (exit code 3), not as an empty page.
+- `guard`, `--dry-run`, `--resume`, `--headful`, `--wait-for-human`, `--cdp`, `wait`, `session` and `detail` behave as for `dom`. `rate.concurrency` is always 1.
+- Nothing is re-requested or re-signed: the rows are whatever the site sent to the browser.
+
 ## Embedded sources
 
 | `embedded.source` | reads |
@@ -122,6 +141,7 @@ Playwright writes the file itself (use an absolute path; the sandbox has no `fs`
 
 1. `http` when `browser_network_requests` showed a JSON endpoint and `scripts/probe-http.mjs` reproduces it without a browser (status 200, `is_json`). Fastest, most stable.
 2. `embedded` when the HTML itself carries the data (`__NEXT_DATA__`, JSON-LD, `window.__INITIAL_STATE__`, an inline `var data = [...]`) and plain HTTP returns the real page (probe-http shows `blocked: false`).
-3. `dom` otherwise. Always works when the user can see the data; slower, and selectors can drift.
+3. `intercept` when the JSON call is visible in the browser but probe-http gets a challenge or 403 for it. As slow as `dom`, but no selectors and exact field names.
+4. `dom` otherwise. Always works when the user can see the data; slower, and selectors can drift.
 
 Record the reason in `notes`.

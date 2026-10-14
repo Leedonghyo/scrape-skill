@@ -121,6 +121,22 @@
         "The user was left to choose between API and site, and the chosen route was executed",
         "If a file was delivered, its row count equals the entity count of the API response for the version used, and a concrete re-run method was given"
       ]
+    },
+    {
+      "id": 9,
+      "prompt": "이 쇼핑몰 검색 결과에서 상품명이랑 가격 전부 모아줘: https://shop.example.com/search?q=키보드 — 개발자도구 보니까 /api/search 라는 데서 데이터가 오던데 그 주소를 직접 열면 403이 떠",
+      "expected_output": "Confirms the JSON call in the browser, runs probe-http on it and sees 403/blocked, then picks strategy intercept (not http, not a selector-only dom recipe): intercept.url_match for the search call, items.path + JSON field paths, pages describing the browser pages. Does not try to copy fingerprints, forge headers or re-sign requests. Dry run shows intercepted > 0 and fill rates; CSV delivered.",
+      "files": [],
+      "expectations": [
+        "probe-http.mjs (or an equivalent plain HTTP request) was run against the JSON endpoint and its 403/blocked result was the stated reason for the strategy",
+        "The saved recipe has strategy intercept with intercept.url_match matching the search API, items.path in the [] grammar, and fields given as JSON paths",
+        "price is numeric (transform number), not the display string",
+        "pages describes the browser-side pagination (param, next_link or scroll), and page 2 was checked to trigger a new matching API call before the full run",
+        "No attempt to replay the API outside the browser with copied cookies/headers, no TLS-impersonation, stealth patch or proxy was used or suggested",
+        "The recipe notes record why intercept was chosen (API refused outside the browser)",
+        "Sample rows and a highlighted screenshot were shown and one confirmation asked before the full collection",
+        "The dry-run summary's intercepted count and fill rates were read before the full run"
+      ]
     }
   ]
 }
