@@ -95,11 +95,11 @@ A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` fo
 | `path` | http/embedded/intercept | path inside the row object |
 | `regex` | both | applied to the string value; first capture group wins, else whole match |
 | `map` | both | `{ "One": 1, "Two": 2, … }` — replaces the value after `regex`; unknown values pass through. Star ratings in class names, status words, "Y"/"N" flags |
-| `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim` |
+| `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim`, `count` |
 
-Order of operations per field: take the value (`attr`/`path`) → `regex` → `map` → `transform`.
+Order of operations per field: take the value (`attr`/`path`) → `regex` → `map` → `transform`. `count` is the exception: it replaces the value with *how many* there are and ignores `attr`/`regex`/`map` — the number of elements matching `selector` inside the container (`dom`), or the length of the array at `path` (`http`/`embedded`/`intercept`; a missing value counts 0).
 
-Values that are only visible as icons (stars, badges, availability) almost always live in the class name: `{ "selector": "p.star-rating", "attr": "class", "regex": "star-rating (\\w+)", "map": { "One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5 } }`.
+Values that are only visible as repeated icons (five `<svg>` stars for a 5-star rating) are counted: `{ "selector": ".rating svg", "transform": "count" }`; if empty stars are drawn too, select only the filled ones (`.rating svg.filled`). Values that are only visible as one icon (stars, badges, availability) almost always live in the class name: `{ "selector": "p.star-rating", "attr": "class", "regex": "star-rating (\\w+)", "map": { "One": 1, "Two": 2, "Three": 3, "Four": 4, "Five": 5 } }`.
 
 Include the item's URL as a column whenever there is one, even if the user did not ask: it is the natural `dedupe_key`, it lets the user open the item, and titles are rarely unique.
 
