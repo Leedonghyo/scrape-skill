@@ -18,22 +18,25 @@ import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import {
   getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
-  csvCell, cookieHeader, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, noiseRegex, UsageError,
+  csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, noiseRegex, UsageError,
 } from './lib.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 const EXAMPLES = path.join(DIR, '..', 'examples');
 const FIXTURE_ORIGIN = 'http://127.0.0.1:8765'; // what examples/local-*.json point at; live tests swap in the real port
+const FIXTURE_TOKEN = 'fixture-token-123456';
 const offline = process.argv.includes('--offline');
 
 // ---------- local fixture server ----------
 // /shop?page=N renders a list by fetching /api/search?page=N. The API refuses anything whose user-agent
 // does not say "Chrome" (a stand-in for fingerprint protection: a bare HTTP client gets 403, the page gets JSON).
 // /api/feed is a cursor API (GET ?cursor=, 400 on an empty cursor), /graphql the same feed as a POST with
-// variables.after, and /feed a page that loads the feed with a "more" button.
+// variables.after, and /feed a page that loads the feed with a "more" button. /app calls /api/private with a
+// bearer token it reads from localStorage (401 without it), like an SPA after login.
 function fixtureServer(port = 0) {
   const PRODUCTS = Array.from({ length: 15 }, (_, i) => ({ id: i + 1, title: `상품 ${i + 1}`, price: `${(i + 1) * 1000}원` }));
   const send = (res, status, type, body) => { res.writeHead(status, { 'content-type': type }); res.end(body); };
@@ -67,6 +70,14 @@ function fixtureServer(port = 0) {
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/feed') return send(res, 200, 'text/html; charset=utf-8', feedHtml);
+    if (u.pathname === '/app') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture app</title></head><body><h1>Fixture app</h1><script>
+  const token = localStorage.getItem('access_token');
+  fetch('/api/private', { headers: token ? { authorization: 'Bearer ' + token } : {} }).catch(() => {});
+</script></body></html>`);
+    if (u.pathname === '/api/private') {
+      if (req.headers.authorization !== `Bearer ${FIXTURE_TOKEN}`) return json(res, 401, { error: 'sign in' });
+      return json(res, 200, { data: { items: PRODUCTS.slice(0, 5) } });
+    }
     if (u.pathname === '/api/feed') {
       if (u.searchParams.has('cursor') && !u.searchParams.get('cursor')) return json(res, 400, { error: 'empty cursor' });
       return json(res, 200, feed(u.searchParams.get('cursor')));
@@ -236,6 +247,62 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 
+// helpers.js in a fake page (node:vm): requestOrigins() classifies header values without ever returning them
+{
+  const TOKEN = 'tok_LOCAL_9f8e7d6c5b4a3210';
+  const CSRF = 'csrf_COOKIE_a1b2c3d4e5f6';
+  const store = (init) => { const m = new Map(Object.entries(init)); return { get length() { return m.size; }, key: (i) => [...m.keys()][i], getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => m.set(k, String(v)), removeItem: (k) => m.delete(k) }; };
+  const page = (extra = {}) => {
+    const g = {
+      URL, Headers, Request, console,
+      location: { href: 'https://shop.test/search', origin: 'https://shop.test' },
+      document: { readyState: 'loading', cookie: `theme=dark; csrftoken=${CSRF}`, querySelectorAll: () => [] },
+      localStorage: store({ auth: JSON.stringify({ access_token: TOKEN, user: 'u1' }) }),
+      sessionStorage: store({}),
+      fetch: () => Promise.resolve({ ok: true }),
+      XMLHttpRequest: class { open() {} setRequestHeader() {} send() {} },
+      ...extra,
+    };
+    g.window = g;
+    vm.createContext(g);
+    vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+    return g;
+  };
+  const g = page();
+  // the "site bundle": two signed calls through fetch, one through XHR
+  vm.runInContext(`
+    function sign(n) { return 'sig_' + n + '_' + 'x'.repeat(12); }
+    function loadPage(n) { return fetch('/api/search?page=' + n, { headers: { Accept: 'application/json', Authorization: 'Bearer ${TOKEN}', 'X-CSRF-Token': '${CSRF}', 'X-Signature': sign(n), 'X-App-Key': 'pk_live_constant_0001' } }); }
+    loadPage(1); loadPage(2);
+    fetch('https://www.google-analytics.com/collect', { headers: { 'X-Signature': 'tracker' } });
+    const x = new XMLHttpRequest(); x.open('POST', '/api/cart'); x.setRequestHeader('X-CSRF-Token', '${CSRF}'); x.send('{}');
+  `, g, { filename: 'https://shop.test/static/app.4f3a9c.js?v=7' });
+  const all = vm.runInContext('window.__scrape.requestOrigins()', g);
+  const ro = vm.runInContext('window.__scrape.requestOrigins({ match: "/api/search" })', g);
+  const r0 = ro.requests[0] || {};
+  const h = Object.fromEntries((r0.headers || []).map((x) => [x.name, x]));
+  ok('requestOrigins: groups matching calls, skips trackers', ro.installed === 'init' && ro.requests.length === 1 && r0.count === 2 && r0.method === 'GET' && all.requests.length === 2 && all.seen === 3, { n: ro.requests.length, seen: all.seen });
+  ok('requestOrigins: storage / cookie / computed', h.authorization?.origin === 'storage:auth' && h.authorization.area === 'local' && h['x-csrf-token']?.origin === 'cookie:csrftoken' && h['x-signature']?.origin === 'computed' && h['x-app-key']?.origin === 'computed', h);
+  ok('requestOrigins: varies tells a signature from a constant', h['x-signature']?.varies === true && h['x-app-key']?.varies === false && h.authorization?.varies === false && eq(r0.plain_headers, ['accept']));
+  ok('requestOrigins: top frames = site script URL + line, no query string', r0.frames?.[0]?.script === 'https://shop.test/static/app.4f3a9c.js' && r0.frames[0].fn === 'loadPage' && r0.frames[0].line === 3 && r0.frames.length <= 3, r0.frames);
+  ok('requestOrigins: XHR is recorded too', all.requests.some((r) => r.via === 'xhr' && r.method === 'POST' && r.headers[0]?.origin === 'cookie:csrftoken'));
+  ok('requestOrigins: no header value in the result', ![TOKEN, CSRF, 'sig_1_', 'pk_live_constant'].some((v) => JSON.stringify(all).includes(v)));
+  ok('requestOrigins: fetch still reaches the page\'s own fetch', vm.runInContext('typeof fetch("/x").then', g) === 'function');
+  // installed late (document already loaded) → says so; collector opt-out → no wrapping at all
+  ok('requestOrigins: late install is reported', /Reload/.test(vm.runInContext('window.__scrape.requestOrigins().note', page({ document: { readyState: 'complete', cookie: '', querySelectorAll: () => [] } }))));
+  const off = page({ __scrape_no_net: true });
+  ok('requestOrigins: collector opt-out leaves fetch untouched', vm.runInContext('window.__scrape.requestOrigins().installed', off) === 'off' && !/__scrape/.test(String(off.fetch)));
+}
+// session export: cookies for every strategy, localStorage origins for the collector's browser
+{
+  const f = path.join(os.tmpdir(), `scrape-selftest-state-${process.pid}.json`);
+  fs.writeFileSync(f, JSON.stringify({ cookies: [{ name: 'a', value: '1', domain: 'a.test' }], origins: [{ origin: 'https://a.test', localStorage: [{ name: 'k', value: 'v' }] }] }));
+  const st = loadStorageState(f);
+  fs.writeFileSync(f, JSON.stringify([{ name: 'a', value: '1' }]));
+  ok('loadStorageState: cookies + origins, bare cookie array still accepted', st.cookies.length === 1 && st.origins[0].localStorage[0].name === 'k' && eq(loadStorageState(f).origins, []));
+  fs.rmSync(f, { force: true });
+}
+
 // csvCell quoting + array join
 ok('csv plain', csvCell('abc') === 'abc');
 ok('csv quote comma', csvCell('a,b') === '"a,b"');
@@ -323,6 +390,15 @@ if (!offline) {
   // intercept: the API refusing the browser itself is a block (exit 3), not an empty page
   const refused = await run(local({ version: 1, name: 'local-intercept-refused', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/refused` }, intercept: { url_match: '/api/refused', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id' } }), []);
   ok('live intercept: refused API → blocked, exit 3', refused.code === 3 && refused.summary.stopped_reason === 'blocked' && refused.summary.blocked_by?.status === 403, { code: refused.code, stopped: refused.summary.stopped_reason });
+  // session.cookies_file also carries localStorage: without it the SPA's API answers 401 (→ login_required, exit 3),
+  // with it the collector's browser has the token and the page's own call succeeds.
+  const APP = { version: 1, name: 'local-intercept-session', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/app` }, intercept: { url_match: '/api/private', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id', title: 'title' } };
+  const anon = await run(local(APP), []);
+  ok('live intercept: API 401 → login_required, exit 3', anon.code === 3 && anon.summary.stopped_reason === 'login_required', { code: anon.code, stopped: anon.summary.stopped_reason });
+  const stateFile = path.join(tmp, 'session.json');
+  fs.writeFileSync(stateFile, JSON.stringify({ cookies: [], origins: [{ origin: fixture.origin, localStorage: [{ name: 'access_token', value: FIXTURE_TOKEN }] }] }));
+  const signedIn = await run(local({ ...APP, session: { cookies_file: stateFile } }), []);
+  ok('live intercept: session export restores localStorage → 5 rows', signedIn.code === 0 && signedIn.summary.rows === 5, { code: signedIn.code, rows: signedIn.summary.rows, stopped: signedIn.summary.stopped_reason });
   // cursor + --resume: stop after 2 pages, then continue from the cursor saved in ~/.scrape/state
   const part = await run(local('local-cursor'), ['--max-pages', '2']);
   const rest = await run(local('local-cursor'), ['--resume'], { keepState: true });

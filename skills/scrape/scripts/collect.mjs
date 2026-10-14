@@ -50,7 +50,9 @@ function killOwnChrome() {
     }
   } catch { /* best effort */ }
 }
-const HELPERS_SRC = fs.readFileSync(HELPERS_PATH, 'utf8');
+// The fetch/XHR hook behind requestOrigins() is an analysis aid for the interactive browser; a collection run
+// never reads it, so it is not installed here.
+const HELPERS_SRC = 'window.__scrape_no_net = true;\n' + fs.readFileSync(HELPERS_PATH, 'utf8');
 
 class Collector {
   constructor(recipe, opts) {
@@ -350,8 +352,8 @@ class Collector {
       if (method && resp.request().method().toUpperCase() !== method) return;
       const status = resp.status();
       const headers = resp.headers();
-      if (status === 403 || status === 429) { cap.matched++; cap.denied = cap.denied || { status, url, headers }; return; }
-      if (!/json/i.test(headers['content-type'] || '')) return;
+      if (status === 401 || status === 403 || status === 429) { cap.matched++; cap.denied = cap.denied || { status, url, headers }; return; }
+      if (status >= 400 || !/json/i.test(headers['content-type'] || '')) return; // an error body is not data
       const seq = cap.matched++;
       const p = resp.text().then((text) => {
         const data = tryParse(text);
@@ -382,7 +384,8 @@ class Collector {
     const denied = cap.denied;
     cap.denied = null;
     if (!hits.length && denied) {
-      // The API refused the browser itself (403/429). That is a block, not an empty page.
+      // The API refused the browser itself. That is a block (or a missing login), not an empty page.
+      if (denied.status === 401) throw new BlockedError('login_required', { kind: 'login_required', url: denied.url, status: 401, signals: ['http 401', 'intercepted API response'] });
       const b = detectBlockedHttp(denied.status, denied.headers, '');
       throw new BlockedError('blocked', { vendor: b.vendor, kind: b.kind, url: denied.url, status: denied.status, signals: [...b.signals, 'intercepted API response'] });
     }
@@ -490,7 +493,7 @@ class Collector {
       }
       this.cdp = true;
       this.context = this.browser.contexts()[0] || (await this.browser.newContext());
-      try { await this.context.addInitScript({ path: HELPERS_PATH }); } catch { /* some CDP targets reject init scripts; inject() still covers each page */ }
+      try { await this.context.addInitScript({ content: HELPERS_SRC }); } catch { /* some CDP targets reject init scripts; inject() still covers each page */ }
       if (this.session?.cookies?.length) await this.context.addCookies(this.session.cookies).catch(() => {});
       this._page = this.context.pages()[0] || (await this.context.newPage());
       this._page.setDefaultTimeout(30_000);
@@ -510,10 +513,27 @@ class Collector {
     }
     if (!this.context) throw new EnvError(`No browser could be launched:\n  ${tried.join('\n  ')}\nFix: install Google Chrome, or run: cd "${SCRIPTS_DIR}" && npx playwright install chromium`);
     if (this.session?.cookies?.length) await this.context.addCookies(this.session.cookies);
+    await this.restoreStorage();
     this._page = this.context.pages()[0] || (await this.context.newPage());
     this._page.setDefaultTimeout(30_000);
-    await this._page.addInitScript({ path: HELPERS_PATH }); // future navigations; inject() covers the current document
+    await this._page.addInitScript({ content: HELPERS_SRC }); // future navigations; inject() covers the current document
     return this._page;
+  }
+
+  // A session export also holds localStorage, where SPAs keep the bearer token their API calls send. Put it
+  // back before the page's own scripts run, once per tab and origin; after that the page owns it (tokens it
+  // refreshes during the run are not overwritten). Own browser only — a --cdp browser is the user's.
+  async restoreStorage() {
+    const origins = (this.session?.origins || []).filter((o) => o.origin && o.localStorage?.length);
+    if (!origins.length) return;
+    await this.context.addInitScript((list) => {
+      try {
+        const mine = list.find((o) => o.origin === location.origin);
+        if (!mine || sessionStorage.getItem('__scrape_ls')) return;
+        for (const { name, value } of mine.localStorage) localStorage.setItem(name, value);
+        sessionStorage.setItem('__scrape_ls', '1');
+      } catch { /* storage unavailable (opaque origin) */ }
+    }, origins);
   }
 
   async inject(page) { try { await page.evaluate(HELPERS_SRC); } catch { /* document still swapping; the init script will cover it */ } }

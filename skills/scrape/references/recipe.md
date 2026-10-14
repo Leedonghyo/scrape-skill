@@ -152,7 +152,7 @@ When the site needs the browser's cookies (login, cleared challenge), export the
 ```
 browser_run_code_unsafe: async (page) => { const s = await page.context().storageState({ path: '<home>/.scrape/sessions/<name>.json' }); return s.cookies.length }
 ```
-Playwright writes the file itself (use an absolute path; the sandbox has no `fs`, but `storageState({ path })` does), so cookie values never pass through the conversation. Reference the file in `session.cookies_file`. `http`/`embedded` strategies send the cookies that match the request host; `dom` imports them into the collector's own Chrome profile. Cookies expire; if a recipe that used to work starts returning login pages, re-export.
+Playwright writes the file itself (use an absolute path; the sandbox has no `fs`, but `storageState({ path })` does), so cookie values never pass through the conversation. Reference the file in `session.cookies_file`. `http`/`embedded` strategies send the cookies that match the request host; `dom`/`intercept` import them into the collector's own Chrome profile and also restore the export's localStorage (where single-page apps keep their login token) once per origin, before the page's scripts run. sessionStorage is not part of the export. Cookies expire; if a recipe that used to work starts returning login pages, re-export.
 
 ## Strategy choice
 
