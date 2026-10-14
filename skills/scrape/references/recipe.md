@@ -37,7 +37,7 @@ Keep recipes boring and explicit. A recipe the model can read back and explain i
 | `items` | no | how to split a page into rows (below). Omit for one row per page |
 | `fields` | yes | column definitions (below) |
 | `detail` | no | follow a per-row link and extract more columns from the detail page |
-| `wait` | no | `dom`/`intercept` only: `{ "selector": css, "timeout_ms": 15000 }` or `{ "network_idle": true }`. A timeout does not abort: the collector logs it, re-checks for a block, and extracts what is there |
+| `wait` | no | `dom`/`intercept` only: `{ "selector": css, "timeout_ms": 15000 }` or `{ "network_idle": true }`, plus optional `"scroll": { "count": 50, "max_rounds": 10, "idle_ms": 1000 }` (or `true`) to scroll each page until `count` items (`items.container`) exist or the count stops growing — for numbered/next-link pages whose tail lazy-loads (Amazon best sellers: 30 of 50 until scrolled). A timeout does not abort: the collector logs it, re-checks for a block, and extracts what is there |
 | `session` | no | `{ "cookies_file": "~/.scrape/sessions/<name>.json", "headers": {...} }` |
 | `rate` | no | `{ "delay_ms": 1500, "jitter_ms": 500, "concurrency": 1 }` (defaults shown). The pause happens before every request, detail pages included. `concurrency` > 1 only for `http` with `param`/`urls`; it is ignored (always 1) for `cursor` and for `intercept` |
 | `http` | `http` only | `{ "url_template": "...{n}...", "method": "GET", "headers": {...}, "body": null }`. `url_template` is where `{n}` goes; `pages` then only carries `type: "param"`, `start_n`, `max_pages`. With `pages.type: "cursor"` the placeholder is `{cursor}`. Both placeholders also work inside `body` (object or string) |

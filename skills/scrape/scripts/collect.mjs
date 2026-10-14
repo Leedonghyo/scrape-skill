@@ -568,6 +568,32 @@ class Collector {
       this.log(`wait for ${wait.selector || 'network idle'} timed out after ${timeout} ms; extracting anyway`);
       await this.guard(page); // a challenge may have replaced the page while we waited
     }
+    if (wait.scroll) await this.scrollToLoad(page, wait.scroll === true ? {} : wait.scroll);
+  }
+
+  // Lazy-loaded tail on an ordinary page (Amazon best sellers render 30 of 50 until you scroll): scroll this
+  // one page until `count` items exist or the count stops growing. Unlike pages.type "scroll" this runs on
+  // every page of a param / next_link / urls list, so numbered pages and lazy loading combine.
+  async scrollToLoad(page, s) {
+    const container = s.container || this.recipe.items?.container || null;
+    const count = () => page.evaluate((c) => (c ? document.querySelectorAll(c).length : (document.scrollingElement || document.documentElement).scrollHeight), container);
+    const max = s.max_rounds ?? 10;
+    const idle = s.idle_ms ?? 1000;
+    let last = await count();
+    let stale = 0;
+    for (let round = 1; round <= max && !this.aborted; round++) {
+      if (s.count && last >= s.count) break;
+      await page.evaluate(() => window.scrollBy(0, Math.max(window.innerHeight, 600) * 2));
+      await sleep(idle);
+      const now = await count();
+      if (now <= last) {
+        // At the bottom with nothing new: one jump to the very end catches loaders that only fire there.
+        await page.evaluate(() => window.scrollTo(0, (document.scrollingElement || document.documentElement).scrollHeight));
+        if (++stale >= 2) break;
+      } else stale = 0;
+      last = now;
+    }
+    if (s.count && last < s.count) this.log(`scrolled the page but found ${last} of ${s.count} expected items`);
   }
 
   async diagnose(page) {

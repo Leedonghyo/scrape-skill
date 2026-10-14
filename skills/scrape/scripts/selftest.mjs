@@ -74,6 +74,16 @@ function fixtureServer(port = 0) {
   const token = localStorage.getItem('access_token');
   fetch('/api/private', { headers: token ? { authorization: 'Bearer ' + token } : {} }).catch(() => {});
 </script></body></html>`);
+    if (u.pathname === '/lazy') {
+      const n = Number(u.searchParams.get('page') || 1);
+      if (n > 2) return send(res, 404, 'text/plain', 'no such page');
+      const li = (i) => `<li class="item" style="height:300px">Item ${(n - 1) * 20 + i}</li>`;
+      return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture lazy ${n}</title></head><body><ul id="list">${Array.from({ length: 10 }, (_, i) => li(i + 1)).join('')}</ul><script>
+  const tail = ${JSON.stringify(Array.from({ length: 10 }, (_, i) => li(i + 11)).join(''))};
+  let done = false;
+  addEventListener('scroll', () => { if (done || innerHeight + scrollY < document.body.scrollHeight - 400) return; done = true; setTimeout(() => document.getElementById('list').insertAdjacentHTML('beforeend', tail), 150); });
+</script></body></html>`);
+    }
     if (u.pathname === '/api/private') {
       if (req.headers.authorization !== `Bearer ${FIXTURE_TOKEN}`) return json(res, 401, { error: 'sign in' });
       return json(res, 200, { data: { items: PRODUCTS.slice(0, 5) } });
@@ -326,14 +336,17 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
 }
 // diagnose(): "429" only means rate limiting next to error/status wording, not as an item number or a price
 {
-  const diag = (title, text) => {
-    const g = { URL, console, location: { href: 'https://shop.test/list', origin: 'https://shop.test' }, document: { readyState: 'loading', cookie: '', title, body: { innerText: text }, documentElement: { innerHTML: '' }, querySelector: () => null, querySelectorAll: () => [] }, __scrape_no_net: true };
+  const diag = (title, text, pathname = '/list') => {
+    const g = { URL, console, location: { href: 'https://shop.test' + pathname, origin: 'https://shop.test', pathname }, document: { readyState: 'loading', cookie: '', title, body: { innerText: text }, documentElement: { innerHTML: '' }, querySelector: () => null, querySelectorAll: () => [] }, __scrape_no_net: true };
     g.window = g;
     vm.createContext(g);
     vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
     return vm.runInContext('window.__scrape.diagnose()', g);
   };
   ok('diagnose: short list page with "Item 429" / price 1,429 is not a block', diag('Catalogue page 22', 'Item 428 ₩1,428 Item 429 ₩1,429 Item 430').blocked === false);
+  // Text-only login walls (no password field): Shopee's /verify/traffic/error keeps the site title.
+  ok('diagnose: thin "please log in" page without a password field is a login wall', diag('網購優惠推薦商品 | 蝦皮購物', '跳到主要內容 需要幫助？ 請登入 看起來您尚未登入。請登入以繼續，或返回首頁。 登入返回首頁', '/verify/traffic/error').login_wall === true && ['로그인이 필요한 서비스입니다.', 'Please log in to continue.', 'ログインしてください'].every((t) => diag('Shop', t).login_wall === true));
+  ok('diagnose: login path with a login button is a login wall; a thin page that merely says "login" is not', diag('Shop', 'Welcome back Login', '/login').login_wall === true && diag('Item 3', 'Item 3 ₩1,000 Login Cart').login_wall === false);
   ok('diagnose: real 429 pages are still rate_limited', ['429 Too Many Requests', 'Error 429', 'HTTP 429: slow down', '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.'].every((t) => diag('', t).kind === 'rate_limited') && diag('Error code: 429', 'nginx').kind === 'rate_limited');
 }
 // session export: cookies for every strategy, localStorage origins for the collector's browser
@@ -414,12 +427,15 @@ if (!offline) {
   ];
   const GQL = { version: 1, name: 'local-cursor-graphql', strategy: 'http', pages: { type: 'cursor', cursor_path: 'data.posts.pageInfo.endCursor' }, http: { url_template: `${FIXTURE_ORIGIN}/graphql`, method: 'POST', body: { query: 'query Posts($after: String) { posts(first: 5, after: $after) { edges { node { id title } } pageInfo { endCursor hasNextPage } } }', variables: { after: '{cursor}' } } }, items: { path: 'data.posts.edges[]' }, fields: { id: 'node.id', title: 'node.title' }, rate: { delay_ms: 100, jitter_ms: 50, concurrency: 4 } };
   const FEED = { version: 1, name: 'local-intercept-cursor', strategy: 'intercept', pages: { type: 'cursor', start: `${FIXTURE_ORIGIN}/feed`, cursor_path: 'next_cursor', load_more_selector: '#more', idle_ms: 500 }, intercept: { url_match: '/api/feed', timeout_ms: 5000 }, items: { path: 'items[]' }, fields: { id: 'id', title: 'title' } };
+  const LAZY = { version: 1, name: 'local-lazy-scroll', strategy: 'dom', pages: { type: 'param', template: `${FIXTURE_ORIGIN}/lazy?page={n}`, max_pages: 5 }, wait: { selector: 'li.item', scroll: { count: 20, idle_ms: 400 } }, items: { container: 'li.item' }, fields: { item: ':scope' }, rate: { delay_ms: 100, jitter_ms: 50 } };
   live.push(
     // http + cursor: 4 pages x 5 rows, first request without the cursor param, null cursor ends the run
     ['local-cursor', local('local-cursor'), [], 20, (s) => s.rows === 20 && s.pages_done === 4 && s.stopped_reason === 'cursor_end'],
     // the same feed as a GraphQL POST: {cursor} inside http.body (null on the first page); concurrency is ignored
     ['local-cursor-graphql', local(GQL), [], 20, (s) => s.rows === 20 && s.stopped_reason === 'cursor_end'],
     // intercept + cursor: the page pages itself through "more"; the cursor only tells us when to stop
+    // param pages whose tail lazy-loads: wait.scroll brings each page from 10 to 20 items
+    ['local-lazy-scroll', local(LAZY), [], 40, (s) => s.rows === 40 && s.pages_done === 3 && s.stopped_reason === 'empty_page'],
     ['local-intercept-cursor', local(FEED), [], 20, (s) => s.rows === 20 && s.intercepted === 4 && s.stopped_reason === 'cursor_end'],
   );
   for (const [recipe, file, args, minRows, extra] of live) {
