@@ -235,6 +235,8 @@ export function jsonField(row, raw) {
   const spec = typeof raw === 'string' ? { path: raw } : raw || {};
   let v = getPath(row, spec.path ?? spec.selector ?? '');
   if (v === undefined) v = null;
+  // transform: "count" — how many, not which: array length (a missing value counts 0, a single value 1)
+  if (spec.transform === 'count') return Array.isArray(v) ? v.length : v == null ? 0 : 1;
   if (spec.regex && v != null) {
     const m = String(v).match(new RegExp(spec.regex, spec.regex_flags || ''));
     v = m ? (m[1] !== undefined ? m[1] : m[0]) : null;

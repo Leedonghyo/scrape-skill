@@ -137,6 +137,19 @@ ok('field transform number', jsonField({ p: '₩37,800원' }, { path: 'p', trans
 ok('field transform trim', jsonField({ s: '  a   b ' }, { path: 's', transform: 'trim' }) === 'a b');
 ok('field string shorthand', jsonField({ a: { name: 'Zoe' } }, 'a.name') === 'Zoe');
 
+// transform count: array length for JSON, number of matching elements in the page
+ok('field transform count (json)', jsonField({ tags: ['a', 'b', 'c'] }, { path: 'tags', transform: 'count' }) === 3 && jsonField({}, { path: 'tags', transform: 'count' }) === 0 && jsonField({ t: 'x' }, { path: 't', transform: 'count' }) === 1);
+{
+  const item = (stars, text) => ({ querySelectorAll: (sel) => (sel === '.rating svg' ? Array.from({ length: stars }, () => ({})) : sel === '.text' && text ? [{ textContent: text, getAttribute: () => null }] : []) });
+  const cards = [item(5, 'great'), item(3, 'ok'), item(0, 'bad'), item(0, '')];
+  const g = { URL, console, location: { href: 'https://a.test/', origin: 'https://a.test' }, document: { readyState: 'loading', cookie: '', querySelectorAll: (sel) => (sel === '.card' ? cards : []) }, __scrape_no_net: true };
+  g.window = g;
+  vm.createContext(g);
+  vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+  const rows = JSON.parse(vm.runInContext('JSON.stringify(window.__scrape.extract({ text: ".text", stars: { selector: ".rating svg", transform: "count" } }, ".card"))', g));
+  ok('field transform count (dom): stars counted, 0 kept, an all-empty card still dropped', eq(rows, [{ text: 'great', stars: 5 }, { text: 'ok', stars: 3 }, { text: 'bad', stars: 0 }]), rows);
+}
+
 // jsonRows: items.path picks the array, fields map per row
 ok('jsonRows', eq(
   jsonRows({ quotes: [{ text: 'a', author: { name: 'X' } }, { text: 'b', author: { name: 'Y' } }] }, { path: 'quotes[]' }, { t: 'text', who: 'author.name' }),

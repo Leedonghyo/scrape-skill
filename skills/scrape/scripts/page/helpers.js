@@ -200,7 +200,7 @@
     return qsa(s, sc === document ? document : sc);
   };
   S.resolve = resolve;
-  // fields: { name: 'css' | { selector, attr, all, regex, transform, absolute } }
+  // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count', absolute } }
   // container: css for each item (one row per match). Omit for a single-row page.
   S.extract = (fields, container) => {
     const scopes = container ? qsa(container) : [document];
@@ -211,6 +211,12 @@
       for (const [name, raw] of Object.entries(fields || {})) {
         const spec = typeof raw === 'string' ? { selector: raw } : raw || {};
         const els = resolve(spec.selector, sc);
+        // transform: "count" — the value is how many elements match (star icons, badges, thumbnails), not their text
+        if (spec.transform === 'count') {
+          row[name] = els.length;
+          if (els.length) any = true;
+          continue;
+        }
         if (spec.all) {
           const arr = els.map((e) => value(e, spec)).filter((v) => v != null && v !== '');
           // join: "\n\n" turns the paragraphs of an article body into one text cell instead of an array
@@ -866,7 +872,7 @@
         const raw = fields[name];
         const sel = typeof raw === 'string' ? raw : raw.selector;
         const matched = !sel || sel === ':scope' ? (sc === document ? [] : [sc]) : resolve(sel, sc);
-        const targets = raw && typeof raw === 'object' && raw.all ? matched : matched.slice(0, 1); // all:true → box every match, label the first
+        const targets = raw && typeof raw === 'object' && (raw.all || raw.transform === 'count') ? matched : matched.slice(0, 1); // all:true / count → box every match, label the first
         let hit = false;
         targets.forEach((el, k) => {
           const label = i === 0 && k === 0 ? name : '';
