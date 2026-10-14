@@ -40,7 +40,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 1. `browser_navigate(url)`, 헬퍼 설치, `overview()`.
 2. `overview().diagnosis`부터 읽습니다. 차단·로그인 벽·유료 벽이면 → **상황별 대응**으로.
-3. `await window.__scrape.robots()` → `disallowed: true`면 → **상황별 대응**.
+3. `await window.__scrape.robots()` → `disallowed: true`면 → **상황별 대응**. 쇼핑몰·검색엔진·SNS·마켓플레이스 같은 상업 사이트면 이어서 이용약관(푸터의 Terms·Conditions of Use·이용약관·利用規約 링크)에서 자동 수집·robots·data mining 금지 문구를 확인합니다. 금지면 미리보기 추출(`extract`·`probe` 포함) **전에** **상황별 대응**의 약관 행으로 묻습니다. robots 금지와 함께 걸리면 질문 하나로 합칩니다.
 4. `overview().official_sources`에 페이지의 API 문서, 개발자 포털, RSS, 사이트맵 링크가 나옵니다. 관련 있는 게 있어도 별도 질문을 만들지 마세요. 확인 메시지(§2)에 사실 한 줄(무료/유료, 링크)만 적고 기본값인 사이트 수집으로 진행합니다. 사용자가 '반복', '자동으로', '회사용', '계속'이라고 했을 때만 API vs 사이트를 묻습니다. 없으면 그걸로 충분한 답이니 더 뒤지지 마세요. 단, 서드파티 집계 사이트(op.gg처럼 다른 회사 데이터를 재가공)면 원 발행자의 개발자 포털(Riot 등)이 공식 소스입니다.
 5. 전략을 고릅니다. 싼 것부터:
    - `overview().api_hints`나 `browser_network_requests(filter: "api|json|graphql")`에 데이터를 담은 JSON 호출이 보이면 → `browser_network_request(index)`로 열어 URL 패턴과 헤더를 적고 `probe-http.mjs <url>`. 브라우저 없이 재현되면(200, `is_json`) → 전략 **`http`**.
@@ -62,7 +62,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 설명하지 말고 보여주세요:
 
 1. `extract(fields, container)` → 처음 5행을 사용자의 필드명으로 마크다운 표로. `fields` 형식: 문자열이면 셀렉터, 객체면 `{selector, attr, regex, map, transform, all, join}`(`transform`은 `number`·`trim`·`count`)(http/embedded 레시피에서는 `path`). `extract`·`highlight`는 DOM 전용이므로 `http`/`embedded`/`intercept` 전략에서는 미리보기·스크린샷용 DOM 셀렉터를 따로 하나 잡으세요. 레시피는 JSON 경로로, 확인은 DOM으로.
-2. `highlight(fields, { container, limit: 4 })` → `browser_take_screenshot`(`filename`은 `.playwright-mcp/<이름>.png`처럼 작업 디렉토리 아래로만 지정. 그 밖의 경로는 "outside allowed roots"로 거부되니, 다른 곳이 필요하면 저장 후 복사) → 보여주기 → `clearHighlight()`. `browser_evaluate`·`browser_snapshot`의 `filename`도 같은 제한입니다.
+2. `highlight(fields, { container, limit: 4 })` → `browser_take_screenshot`(`filename`은 `.playwright-mcp/<이름>.png`처럼 상대 경로로. Playwright MCP의 작업 루트(보통 홈, 즉 `~/.playwright-mcp/`) 기준으로 저장되니 결과에 찍힌 경로를 확인해 쓰세요. 허용 루트 밖 경로는 "outside allowed roots"로 거부되니 저장 후 복사. "waiting for fonts"로 타임아웃이면 탭이 뒤에 있는 것이니 `browser_run_code_unsafe`로 `await page.bringToFront()` 후 다시) → 보여주기 → `clearHighlight()`. `browser_evaluate`·`browser_snapshot`의 `filename`도 같은 제한입니다.
 3. 질문 하나: "이게 원하시는 데이터가 맞나요? 빠진 게 있나요?" 사용자의 언어로. 규모 추정과 2페이지 검증 결과를 같은 메시지에 넣어 추가 턴이 없게 하세요.
 
 틀렸으면 **화면에 보이는 그대로의 예시값 하나**를 요청하세요("가격이 화면에 어떻게 보이나요? 예: 39,000원"). 그걸로 `findByText`를 돌려 필드를 고치고 다시 보여줍니다. 사용자에게 페이지 구조를 설명해 달라고 하지 마세요.
@@ -93,7 +93,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 | 상황 | 말할 것 | 할 것 |
 |---|---|---|
 | 공식 API / 데이터 페이지가 있음 | 별도 질문 없이 확인 메시지에 사실 한 줄: 무료인지 유료인지, 한도, 링크(문서가 있으면 열어 읽고 "문서 기준으로"라고 말함. RSS처럼 문서가 없으면 링크만). 사용자가 반복·자동·회사용이라고 했을 때만 "사이트에서 받을까요, API로 할까요?" | 기본은 사이트 수집 계속. API를 고르면 직접 쓰도록 돕는다. |
-| 로그인 벽 (`diagnosis.login_wall`) | "로그인이 필요해요. Chrome 창에서 로그인하시고 끝나면 알려주세요." | 사용자를 기다리고, `overview()` 재실행, 수집기용 쿠키 내보내기. 자격 증명은 절대 직접 입력하지 않음. |
+| 로그인 벽 (`diagnosis.login_wall`) | "로그인이 필요해요. Chrome 창에서 로그인하시고 끝나면 알려주세요." | 사용자를 기다리고, `overview()` 재실행, 수집기용 쿠키 내보내기. 자격 증명은 절대 직접 입력하지 않음. 거절하면 이미 본 것(네트워크에 보인 호출, 페이지 HTML)만으로 판단하고, 기억으로 내부 API를 찔러 보는 등 추가 시도는 무엇을 할지 말하고 동의받은 뒤에만. 없으면 '수집한 것 없음'과 대안을 말하고 끝. |
 | 유료 벽 신호 | "구독이 필요한 내용이에요. 있으면 로그인하시고, 없으면 공개된 부분만 받을 수 있어요." | 사용자 선택대로 계속. |
 | `robots.txt`가 경로를 금지 | "사이트가 이 경로를 자동 수집 금지로 표시했어요. 그래도 진행할까요?" | 답할 때까지 멈춤. 기본은 존중. 선택을 레시피 `notes`에 기록. |
 | 이용약관이 스크래핑을 금지(robots.txt와 별개) | "이 사이트 이용약관은 자동 수집을 금지하고 있어요(링크). robots.txt와 별개의 명시적 금지입니다. 그래도 진행할까요?" | 답할 때까지 멈춤. 기본은 존중. 선택을 레시피 `notes`에 기록. |
@@ -102,9 +102,11 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 ### 봇 차단 사다리
 
-탐지 계층(IP 평판, TLS·HTTP 지문, 헤더 일관성, JS 챌린지, 행동 분석, Turnstile/reCAPTCHA, 허니팟, 쿠키 일관성)은 `references/blocks.md`에 설명돼 있습니다. 사다리:
+탐지 계층(IP 평판, TLS·HTTP 지문, 헤더 일관성, JS 챌린지, 행동 분석, Turnstile/reCAPTCHA, 허니팟, 쿠키 일관성)은 `references/blocks.md`에 설명돼 있습니다.
 
-1. **다른 문 찾기.** JSON 엔드포인트, RSS, 사이트맵, 모바일·AMP 버전이 챌린지 없이 같은 데이터를 주는 경우가 많습니다. MCP 창 자체가 막혀 네트워크를 볼 수 없으면, 사용자에게 자기 Chrome에서 HAR 파일을 저장해 달라고 하고(문구는 `references/messages.md`) `node <skill-dir>/scripts/har-scan.mjs <file.har> --match "<화면에 보이는 값>"`으로 데이터 API를 찾습니다. Chrome의 기본 저장은 sanitized라 쿠키·인증 헤더가 빠져 있으니, 그 헤더가 필요한 API라면 그 사실을 사용자에게 알려주세요. HAR는 민감한 파일입니다. 내용을 대화에 옮기지 말고 스캐너 출력만 쓰세요.
+사다리는 사용자의 결정을 넘지 않습니다. 사용자가 '멈춰', '받은 데까지만', '여기까지'라고 하면 받은 행이 0개여도 거기서 끝내고, 받은 것을 저장하고 보고합니다. 해석해서 다음 단을 오르지 마세요. 다른 브라우저(MCP 창, Claude in Chrome, CDP)로 옮기는 4단계는 매번 '어느 창에서, 몇 페이지를'을 말하고 동의를 받은 뒤에만 합니다. 사다리:
+
+1. **다른 문 찾기.** JSON 엔드포인트, RSS, 사이트맵, 모바일·AMP 버전이 챌린지 없이 같은 데이터를 주는 경우가 많습니다. 네트워크·페이지·HAR에서 실제로 본 주소만 씁니다. 내부 API 주소를 기억이나 추측으로 치지 않습니다. MCP 창 자체가 막혀 네트워크를 볼 수 없으면, 사용자에게 자기 Chrome에서 HAR 파일을 저장해 달라고 하고(문구는 `references/messages.md`) `node <skill-dir>/scripts/har-scan.mjs <file.har> --match "<화면에 보이는 값>"`으로 데이터 API를 찾습니다. Chrome의 기본 저장은 sanitized라 쿠키·인증 헤더가 빠져 있으니, 그 헤더가 필요한 API라면 그 사실을 사용자에게 알려주세요. HAR는 민감한 파일입니다. 내용을 대화에 옮기지 말고 스캐너 출력만 쓰세요.
 2. **사람이 확인을 통과하게.** Playwright MCP 창은 사용자가 클릭할 수 있는 실제 Chrome입니다. 챌린지를 완료해 달라고 하고, 기다리고, `overview()` 재실행. 수집기가 통과한 세션을 물려받도록 쿠키를 내보냅니다.
 3. **사람처럼 행동.** `rate.delay_ms`를 올리고(3000+), `concurrency` 1 유지, 수집기를 `--headful --wait-for-human`으로 돌려 재확인 때 실패 대신 멈추게. `--wait-for-human`은 `js_challenge`·`turnstile`·`captcha`·`login_required`에만 유효하고, `access_denied`·`rate_limited`는 사람이 클릭으로 통과할 수 없어 즉시 종료합니다(`collect.mjs`의 `SOLVABLE_BY_HUMAN`). **`diagnosis.kind`가 `access_denied`인데 MCP 창에서는 다음 페이지가 열리면 이 단계를 건너뛰고 바로 4단계로 갑니다.** 수집기 자체 브라우저의 속도를 늦춰도 Akamai가 그 브라우저에 대해 이미 내린 판정은 바뀌지 않습니다.
 4. **사용자의 실제 브라우저로 수집** (수집기 자체 브라우저에는 하드 차단 — 예: Akamai가 1페이지 이후 403 — 을 주지만 사람에게는 잘 열리는 사이트). 두 가지 방법:
