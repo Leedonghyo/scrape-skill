@@ -139,14 +139,15 @@ export function mergeHeaders(...sets) {
   return out;
 }
 
-// Playwright storageState ({ cookies, origins }) or a bare cookie array.
+// Playwright storageState ({ cookies, origins }) or a bare cookie array. `origins` carries each origin's
+// localStorage, which the collector's browser restores (http/embedded only ever use the cookies).
 export function loadStorageState(file) {
   if (!file) return null;
   const p = expandHome(file);
   if (!fs.existsSync(p)) throw new UsageError(`session.cookies_file not found: ${p}`);
   const s = tryParse(fs.readFileSync(p, 'utf8'));
   if (!s) throw new UsageError(`session.cookies_file is not valid JSON: ${p}`);
-  return { cookies: Array.isArray(s) ? s : s.cookies || [] };
+  return { cookies: Array.isArray(s) ? s : s.cookies || [], origins: Array.isArray(s) ? [] : s.origins || [] };
 }
 
 // Cookie header for one request: only cookies whose domain/path/secure/expiry fit the URL, like a browser would send.

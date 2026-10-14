@@ -112,7 +112,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
    - **CDP로 수집기 연결**: 사용자가 자기 Chrome을 `--remote-debugging-port=9222`로(이미 열려 있지 않은 프로필로) 띄우면 `node collect.mjs <name> --cdp 9222`가 그 실제 세션을 몰고, 절대 닫지 않습니다. 새 Playwright 브라우저가 걸리는 일부 보호는 피하지만 강한 안티봇은 CDP도 탐지합니다. 그러면 위의 세션 안 브라우저로.
 5. **솔직히 말하기.** 어느 것도 안 되면 이 사이트는 지금 자동 수집을 허용하지 않는다고, 대안은 무엇이었는지(보통 공식 API) 솔직하게 말하세요.
 
-이 스킬이 하지 않는 것, 즉흥으로도 하지 말 것: 캡차 풀이나 솔버 서비스 연동, 자동화를 숨기는 스텔스 패치, 차단을 피하려는 프록시 로테이션, 숨은 허니팟 링크 클릭. 사용자 본인의 실제 브라우저를 사람 속도로 모는 건 괜찮지만, 확인 절차를 속이려고 사람을 흉내 내는 건 안 됩니다. 수집기는 설계상 멈추고 사람에게 넘깁니다.
+이 스킬이 하지 않는 것, 즉흥으로도 하지 말 것: 캡차 풀이나 솔버 서비스 연동, 자동화를 숨기는 스텔스 패치, 차단을 피하려는 프록시 로테이션, 숨은 허니팟 링크 클릭, 요청 서명이나 토큰 생성 알고리즘의 재구현·우회(서명이 필요한 API는 `intercept`로 페이지가 직접 보내게 합니다). 사용자 본인의 실제 브라우저를 사람 속도로 모는 건 괜찮지만, 확인 절차를 속이려고 사람을 흉내 내는 건 안 됩니다. 수집기는 설계상 멈추고 사람에게 넘깁니다.
 
 ## 대화 규칙
 
@@ -137,6 +137,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 | `embedded()` / `embeddedGet(source, path)` | 페이지가 이미 담고 있는 JSON (`__NEXT_DATA__`, `window.__*`, JSON-LD) |
 | `pagination()` | 다음 링크, 페이지 파라미터, 경로 패턴, 무한 스크롤 추정 |
 | `apiHints()` | 지금까지 보인 XHR/fetch URL |
+| `requestOrigins({match, frames})` | API 호출별 헤더 이름, 값의 출처(`storage:<key>` / `cookie:<name>` / `computed`), 보낸 스크립트 위치. 값은 반환하지 않음. 헬퍼 설치 후 새로고침해야 첫 요청부터 보임(`references/strategies.md`) |
 | `diagnose()` | 봇 차단 벤더/종류, 로그인 벽, 유료 벽 신호 |
 | `await robots(path)` | 이 출처의 robots.txt 판정. `crawl_delay`(초)가 있으면 그 값 × 1000을 `rate.delay_ms`의 하한으로 쓴다 |
 | `await autoScroll({rounds, container})` | 무한 스크롤 테스트. 스크롤 후 항목 수 |
@@ -162,4 +163,4 @@ node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <k
 
 파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.
 
-필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `examples/`(동작하는 레시피).
+필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, 토큰·서명 출처, HAR에서 API 찾기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `examples/`(동작하는 레시피).

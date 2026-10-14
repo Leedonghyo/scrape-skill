@@ -541,6 +541,153 @@
     }
     return out;
   };
+  // ---------- request origins: which script sends the API call, and where its headers come from ----------
+  // apiHints() only knows URLs (performance entries). To learn who builds a request, fetch and XMLHttpRequest
+  // are wrapped when the helpers load, and every call is logged with its header NAMES and the top frames of
+  // `new Error().stack`. Header VALUES are compared with localStorage / sessionStorage / document.cookie at
+  // send time and then dropped; what is kept is the classification and a hash to tell "same every time" from
+  // "changes per request".
+  // Limits: only requests made after the helpers loaded are seen, so install with addInitScript and reload;
+  // pasted through browser_evaluate, the log starts at that moment. The wrapper is deliberately plain (the page
+  // can see that fetch is wrapped) — it is an analysis aid, never something to disguise. The collector
+  // (collect.mjs) sets window.__scrape_no_net and does not install it at all.
+  const PLAIN_HEADER = /^(accept|accept-language|content-type|cache-control|pragma|x-requested-with|if-none-match|if-modified-since|range)$/i;
+  const hashOf = (s) => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0; return h; };
+  const storageEntries = (which) => {
+    const out = [];
+    try { const area = window[which]; for (let i = 0; i < area.length; i++) { const k = area.key(i); out.push([k, area.getItem(k) || '']); } } catch (e) { /* storage blocked in this frame */ }
+    return out;
+  };
+  // 'storage:<key>' | 'cookie:<name>' | 'computed' for one header value. "computed" = not readable from storage
+  // or cookies: built by the page's code (signature, timestamp, nonce), hard-coded in the bundle, or kept in memory.
+  const headerOrigin = (raw) => {
+    const token = String(raw == null ? '' : raw).replace(/^(bearer|basic|token|jwt)\s+/i, '');
+    if (token.length < 6) return { origin: 'computed' };
+    const holds = (s) => s === token || (token.length >= 8 && s.includes(token));
+    for (const [which, area] of [['localStorage', 'local'], ['sessionStorage', 'session']]) {
+      for (const [k, v] of storageEntries(which)) if (k !== S.collectKey && holds(v)) return { origin: 'storage:' + k, area };
+    }
+    let cookies = '';
+    try { cookies = document.cookie || ''; } catch (e) { /* sandboxed document */ }
+    for (const part of cookies.split(/;\s*/)) {
+      const i = part.indexOf('=');
+      if (i < 1) continue;
+      const v = part.slice(i + 1);
+      let dec = v;
+      try { dec = decodeURIComponent(v); } catch (e) { /* not URL-encoded */ }
+      if (v.length >= 6 && (holds(v) || holds(dec))) return { origin: 'cookie:' + part.slice(0, i) };
+    }
+    return { origin: 'computed' };
+  };
+  const stackFrames = (stack) => {
+    const out = [];
+    for (const line of String(stack || '').split('\n')) {
+      if (line.includes('__scrape')) continue; // our own wrapper frames
+      const m = line.match(/((?:https?|file):\/\/[^\s()]+?):(\d+):(\d+)\)?\s*$/);
+      if (!m) continue;
+      const fn = (line.match(/^\s*at (?:async )?([^\s(]+) \(/) || line.match(/^([^@\s]+)@/) || [])[1];
+      out.push({ script: m[1].replace(/[?#].*$/, ''), line: Number(m[2]), col: Number(m[3]), fn: fn || undefined });
+      if (out.length >= 10) break;
+    }
+    return out;
+  };
+  const net = (window.__scrape_net = window.__scrape_net || { log: [], wrapped: false, late: document.readyState !== 'loading' });
+  // Re-installing the helpers replaces record() but never wraps twice.
+  net.record = function __scrape_record(via, method, url, headers) {
+    let abs;
+    try { abs = new URL(url, location.href).href; } catch (e) { return; }
+    if (NOISE.test(abs)) return;
+    net.log.push({
+      via,
+      method: String(method || 'GET').toUpperCase(),
+      url: abs,
+      headers: headers.map(([name, value]) => {
+        const n = String(name).toLowerCase();
+        return PLAIN_HEADER.test(n) ? { name: n, plain: true } : { name: n, ...headerOrigin(value), hash: hashOf(String(value)) };
+      }),
+      frames: stackFrames(new Error().stack),
+    });
+    if (net.log.length > 300) net.log.shift();
+  };
+  if (!net.wrapped && !window.__scrape_no_net) {
+    net.wrapped = true;
+    if (typeof window.fetch === 'function') {
+      const origFetch = window.fetch;
+      window.fetch = function __scrape_fetch(input, init) {
+        try {
+          const req = typeof Request !== 'undefined' && input instanceof Request ? input : null;
+          const headers = [];
+          const add = (h) => {
+            if (!h) return;
+            if (Array.isArray(h)) for (const p of h) headers.push([p[0], p[1]]);
+            else if (typeof h.forEach === 'function') h.forEach((v, k) => headers.push([k, v]));
+            else for (const k of Object.keys(h)) headers.push([k, h[k]]);
+          };
+          if (req) add(req.headers);
+          if (init && init.headers) add(init.headers);
+          window.__scrape_net.record('fetch', (init && init.method) || (req && req.method), req ? req.url : String(input), headers);
+        } catch (e) { /* never break the page's own request */ }
+        return origFetch.apply(this, arguments);
+      };
+    }
+    if (typeof XMLHttpRequest !== 'undefined') {
+      const P = XMLHttpRequest.prototype;
+      const origOpen = P.open;
+      const origSet = P.setRequestHeader;
+      const origSend = P.send;
+      P.open = function __scrape_open(method, url) {
+        try { this.__scrape_req = { method, url: String(url), headers: [] }; } catch (e) { /* ignore */ }
+        return origOpen.apply(this, arguments);
+      };
+      P.setRequestHeader = function __scrape_set(name, value) {
+        try { if (this.__scrape_req) this.__scrape_req.headers.push([name, value]); } catch (e) { /* ignore */ }
+        return origSet.apply(this, arguments);
+      };
+      P.send = function __scrape_send() {
+        try { const r = this.__scrape_req; if (r) { delete this.__scrape_req; window.__scrape_net.record('xhr', r.method, r.url, r.headers); } } catch (e) { /* ignore */ }
+        return origSend.apply(this, arguments);
+      };
+    }
+  }
+  // opts.match: regex source tested against the request URL ("/api/search"). opts.frames: stack depth to return
+  // (default 3; raise it when the top frames are all a library such as jquery/axios). Returns no header values, ever.
+  S.requestOrigins = (opts = {}) => {
+    let re = null;
+    if (opts.match) { try { re = new RegExp(opts.match); } catch (e) { return { error: 'bad regex: ' + e.message }; } }
+    const groups = new Map();
+    for (const r of net.log) {
+      if (re && !re.test(r.url)) continue;
+      const key = r.method + ' ' + r.url.replace(/(\d{6,}|[0-9a-f-]{16,})/g, '{id}').replace(/\?.*$/, '');
+      const g = groups.get(key) || { method: r.method, url: cut(key.slice(r.method.length + 1), 160), via: r.via, count: 0, headers: new Map(), plain: new Set(), frames: [] };
+      g.count++;
+      g.frames = r.frames; // the latest call's stack
+      for (const h of r.headers) {
+        if (h.plain) { g.plain.add(h.name); continue; }
+        const e = g.headers.get(h.name) || { name: h.name, origin: h.origin, area: h.area, hashes: new Set() };
+        if (e.origin === 'computed' && h.origin !== 'computed') { e.origin = h.origin; e.area = h.area; }
+        e.hashes.add(h.hash);
+        g.headers.set(h.name, e);
+      }
+      groups.set(key, g);
+    }
+    const requests = [...groups.values()].slice(-(opts.limit || 15)).map((g) => ({
+      method: g.method,
+      url: g.url,
+      via: g.via,
+      count: g.count,
+      // varies: true = a different value on every call (signature, timestamp, nonce); false = same value each time; null = seen once
+      headers: [...g.headers.values()].map((e) => ({ name: e.name, origin: e.origin, area: e.area, varies: g.count > 1 ? e.hashes.size > 1 : null })),
+      plain_headers: [...g.plain],
+      frames: g.frames.slice(0, opts.frames || 3),
+    }));
+    return {
+      installed: !net.wrapped ? 'off' : net.late ? 'late' : 'init',
+      note: !net.wrapped ? 'the fetch/XHR hook is not installed in this page' : net.late ? 'installed after the page had started: earlier requests are missing. Reload (the init script then catches the first request) or trigger the call again.' : undefined,
+      seen: net.log.length,
+      requests,
+    };
+  };
+
   S.diagnose = () => {
     const title = norm(document.title);
     const fullText = norm(document.body ? document.body.innerText : '');
@@ -795,6 +942,7 @@
     embedded: 'embedded() / embeddedGet(source, path) -> JSON the page already ships',
     pagination: 'pagination() -> next links, page params, infinite scroll guess',
     apiHints: 'apiHints() -> XHR/fetch URLs seen so far (also see browser_network_requests)',
+    requestOrigins: 'requestOrigins({match, frames}) -> per API call: header names, where each value comes from (storage:<key> / cookie:<name> / computed), and the script frames that sent it. Never returns header values',
     officialSources: 'officialSources() -> links to API docs, developer portals, RSS/sitemaps on this page',
     diagnose: 'diagnose() -> bot-block / login / paywall signals',
     robots: 'await robots(path) -> robots.txt verdict for this origin',

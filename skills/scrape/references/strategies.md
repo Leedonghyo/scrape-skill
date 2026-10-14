@@ -31,7 +31,7 @@ GraphQL: the body is the query. Put the POST body in `http.body` (an object is s
 
 The first request sends `"after": null`. Relay servers usually keep returning the last `endCursor` on the final page; the run then ends on the next request, when the cursor stops moving or the page comes back empty. Persisted queries (`extensions.persistedQuery.sha256Hash` instead of `query`) replay the same way: copy the body as the browser sent it.
 
-Short-lived tokens (`authorization` that changes per session): the recipe will expire. Note it in `notes` and expect to re-capture the header when re-running.
+Short-lived tokens (`authorization` that changes per session): an `http` recipe with the header copied in will expire. Check where the value comes from ("Where a token or signature comes from" below); a recipe that lets the page send it (`intercept`) usually outlives one that copies it. Note the choice in `notes`.
 
 ## 2. Fingerprint-protected JSON (strategy `intercept`)
 
@@ -43,6 +43,32 @@ The browser shows the JSON call, but `probe-http.mjs` on the same URL returns 40
 4. `--dry-run`, then read `intercepted` in the summary: `0` means nothing matched (`url_match` wrong, the call fires only after interaction, or the response is not `application/json`). Raise `intercept.timeout_ms` for slow SPAs.
 
 The preview for the user is still DOM-based (`extract`/`highlight` on the rendered list), as with `http`. If even the browser's own call comes back 403, the collector stops with `blocked`; continue with the block ladder in SKILL.md.
+
+### Where a token or signature comes from
+
+An API call that needs `authorization`, `x-csrf-token`, `x-signature` or similar raises one question before choosing a strategy: can that value be carried into a later run, or does the page make it fresh every time? `requestOrigins` answers it from inside the page:
+
+```
+browser_evaluate  () => window.__scrape.requestOrigins({ match: "/api/search" })
+```
+
+For each matching fetch/XHR call it returns the header names, where each value came from, whether it changed between calls (`varies`), and the top stack frames (script URL, line, function) of the code that sent it. It never returns a header value. `plain_headers` lists content-negotiation headers (`accept`, `content-type`, `x-requested-with`) that need no thought.
+
+| `origin` | meaning | what to do |
+|---|---|---|
+| `cookie:<name>` | the value is a readable cookie (typical CSRF token) | Export the session (recipe.md, "`session`") and re-run: `http` sends the cookie, but the header itself must still be produced, so prefer `intercept`/`dom`, where the page builds it from the restored cookie. |
+| `storage:<key>` | the value sits in localStorage (`area: "local"`) or sessionStorage (`area: "session"`) — typical bearer token after login | `area: "local"`: export the session; the file carries localStorage and the collector's browser restores it, so an `intercept` (or `dom`) recipe works until the token expires. `area: "session"` is not part of an export: the user logs in in the collector's window (`--headful --wait-for-human`), or the run goes through their real browser (`--cdp`). |
+| `computed` | not found in storage or cookies: a signature, timestamp or nonce built by the page's code, a key compiled into the bundle, or a token held only in memory | `varies: true` → per-request signature. Use `intercept` and write that in `notes`. `varies: false` → probably a constant app key; an `http` recipe with that header in `http.headers` may work (confirm with probe-http), otherwise `intercept`. |
+
+Do not reimplement the signing or token-generation code, however short it looks in `frames`. The frames are there to tell *that* the value is computed and by which script, so the choice (`intercept`) can be explained; rebuilding the algorithm is circumvention and outside this skill.
+
+Limits of the hook:
+
+- It sees only requests made after the helpers loaded. The standard install uses `addInitScript`, which takes effect on the next navigation: reload once and the first request is captured (`installed: "init"`). With the `browser_evaluate` paste fallback, or before that reload, `installed` is `"late"` and only later calls (scroll, page 2) show up.
+- Calls made from a web worker, a service worker or a cross-origin iframe are not seen; `browser_network_requests` still lists them.
+- HttpOnly cookies are invisible to page scripts, so a header copied from one cannot happen in the page either; the browser attaches such cookies itself and a session export includes them.
+- When the top frames are all a library (`jquery.js`, `axios`), ask for more with `requestOrigins({ match, frames: 8 })`.
+- The hook is visible to the page (`fetch` no longer prints as native code). It is never disguised, and `collect.mjs` does not install it.
 
 ### Finding the API in a HAR file
 
