@@ -29,7 +29,7 @@ const ARGS = { 'max-pages': 'number', limit: 'number', 'dry-run': 'boolean', out
 const NAV_TIMEOUT = 45_000;
 const HUMAN_WAIT_MS = 5 * 60_000;
 const INTERCEPT_TIMEOUT = 10_000; // default intercept.timeout_ms
-const INTERCEPT_SETTLE_MS = 400;  // a page may fire the call more than once; wait until it goes quiet
+const INTERCEPT_SETTLE_MS = 100;  // default intercept.settle_ms: quiet time after the last matching call before moving on
 // Block kinds a person can actually clear by acting in the browser window. Everything else (access_denied,
 // rate_limited, bot_page) is a hard refusal that waiting cannot change.
 const SOLVABLE_BY_HUMAN = new Set(['js_challenge', 'turnstile', 'captcha', 'login_required']);
@@ -345,11 +345,15 @@ class Collector {
     const ic = this.recipe.intercept;
     const re = new RegExp(ic.url_match);
     const method = ic.method ? String(ic.method).toUpperCase() : null;
-    const cap = { hits: [], matched: 0, pending: new Set(), denied: null };
+    const cap = { hits: [], matched: 0, pending: new Set(), inflight: new Set(), denied: null };
+    const wanted = (req) => re.test(req.url()) && (!method || req.method().toUpperCase() === method);
+    // Matching requests still on the wire: settle() waits for these instead of sleeping a fixed time.
+    const onRequest = (req) => { if (wanted(req)) cap.inflight.add(req); };
+    const onFailed = (req) => { cap.inflight.delete(req); };
     const onResponse = (resp) => {
       const url = resp.url();
-      if (!re.test(url)) return;
-      if (method && resp.request().method().toUpperCase() !== method) return;
+      cap.inflight.delete(resp.request());
+      if (!wanted(resp.request())) return;
       const status = resp.status();
       const headers = resp.headers();
       if (status === 401 || status === 403 || status === 429) { cap.matched++; cap.denied = cap.denied || { status, url, headers }; return; }
@@ -365,19 +369,23 @@ class Collector {
       }, () => { /* body gone: the page navigated away mid-read */ }).finally(() => cap.pending.delete(p));
       cap.pending.add(p);
     };
+    page.on('request', onRequest);
+    page.on('requestfailed', onFailed);
     page.on('response', onResponse);
-    cap.stop = () => page.off('response', onResponse);
+    cap.stop = () => { page.off('request', onRequest); page.off('requestfailed', onFailed); page.off('response', onResponse); };
     return cap;
   }
 
   // New responses since the last call, in arrival order. waitFirst: give the page intercept.timeout_ms to make
-  // the call at all, then wait until no further matching response shows up for a moment.
+  // the call at all, then wait until no matching request is in flight and none has arrived for settle_ms
+  // (a page may call the API more than once). A fixed 400 ms here used to cost ~0.4 s on every page.
   async settle(cap, page, waitFirst = true) {
     const timeout = this.recipe.intercept.timeout_ms ?? INTERCEPT_TIMEOUT;
     if (waitFirst) {
       const deadline = Date.now() + timeout;
-      while (!cap.matched && Date.now() < deadline && !this.aborted) await sleep(100);
-      for (let n = -1; n !== cap.matched && Date.now() < deadline + INTERCEPT_SETTLE_MS;) { n = cap.matched; await sleep(INTERCEPT_SETTLE_MS); }
+      const quiet = this.recipe.intercept.settle_ms ?? INTERCEPT_SETTLE_MS;
+      while (!cap.matched && Date.now() < deadline && !this.aborted) await sleep(25);
+      for (let n = -1; (n !== cap.matched || cap.inflight.size) && Date.now() < deadline + quiet && !this.aborted;) { n = cap.matched; await sleep(quiet); }
     }
     await Promise.race([Promise.allSettled([...cap.pending]), sleep(5000)]);
     const hits = cap.hits.splice(0).sort((a, b) => a.seq - b.seq);
