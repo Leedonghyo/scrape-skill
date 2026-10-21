@@ -52,7 +52,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
    - `dom`: `overview().lists`에서 시작(가장 큰 반복 블록이 보통 데이터). 사용자가 말한 각 필드에 대해 `findByText("<화면에 보이는 예시값>")`이 정확한 요소와 `list.recipe_hint.container`, `field`를 줍니다. 각 셀렉터를 `probe(selector, { within: container })`로 확인: `count`가 항목 수와 같고 `distinct_texts`가 높아야 진짜 데이터입니다.
    - 값이 컨테이너 바깥의 다음 행에 있으면(제목 행 + 점수 행처럼 표가 2행 구조) 필드 셀렉터 앞에 `+ `를 붙입니다(`"+ .score"`). `probe("+ .score", { within: "tr.athing" })`로 개수가 항목 수와 맞는지 확인하세요. `findByText`가 엉뚱한 상위 컨테이너를 가리키면 이 경우입니다.
    - 텍스트가 아니라 아이콘으로 보이는 값(별점, 재고 배지, 플래그)은 텍스트로 못 찾습니다. `overview().lists[].fields`나 스냅샷에서 요소를 잡으세요. `probe`가 서로 다른 `classes`를 보여주고, 레시피는 `attr: "class"` + `regex` + `map`으로 읽습니다(예: `"Three"` → `3`). 값이 아이콘 개수로만 보이면(별 `<svg>` 5개 = 별점 5) `transform: "count"`로 매칭 개수를 셉니다.
-   - `http`/`embedded`/`intercept`: JSON에서 배열(`items.path`)과 행별 경로를 찾습니다. API가 페이지 번호 대신 커서(`next_cursor`, `after`, `endCursor`)로 넘어가면 `pages.type: cursor`를 씁니다(`references/recipe.md`). `embeddedGet`과 네트워크 응답 본문이 그걸 보는 창입니다.
+   - `http`/`embedded`/`intercept`: JSON에서 배열(`items.path`)과 행별 경로를 찾습니다. API가 페이지 번호 대신 커서(`next_cursor`, `after`, `endCursor`)로 넘어가면 `pages.type: cursor`, 다음 페이지 주소를 통째로 주면(`links.next`, `next_page_url`) `pages.type: next_url`을 씁니다(`references/recipe.md`). `embeddedGet`과 네트워크 응답 본문이 그걸 보는 창입니다.
    - 항목 URL이 있으면 열로 넣으세요. 자연스러운 `dedupe_key`이고 사용자도 링크를 좋아합니다.
    안정적인 셀렉터(`id`, `data-testid`, 의미 있는 class)를 위치 기반보다 우선하세요. 헬퍼는 이미 해시 class를 피합니다.
 7. 사용자에게 말하기 **전에** 두 번째 페이지(2페이지 또는 다른 항목의 상세 페이지)를 같은 매핑으로 확인하세요. 그래야 확인 메시지에 "1·2페이지에서 검증했다"고 적을 수 있습니다. 가장 흔한 실패는 첫 페이지에서만 맞는 매핑입니다.

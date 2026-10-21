@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 export const SCRIPTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 export const HELPERS_PATH = path.join(SCRIPTS_DIR, 'page', 'helpers.js');
 export const SCRAPE_HOME = path.join(os.homedir(), '.scrape');
-export const PAGE_TYPES = ['single', 'urls', 'param', 'next_link', 'scroll', 'cursor'];
+export const PAGE_TYPES = ['single', 'urls', 'param', 'next_link', 'scroll', 'cursor', 'next_url'];
 export const STRATEGIES = ['dom', 'http', 'embedded', 'intercept'];
 export const FORMATS = ['csv', 'json', 'jsonl'];
 
@@ -96,6 +96,11 @@ export function validateRecipe(r) {
       if (!r.http?.url_template) fail('"http.url_template" is required for pages.type cursor');
       if (!r.http.url_template.includes('{cursor}') && !JSON.stringify(r.http.body ?? '').includes('{cursor}')) fail('"http.url_template" or "http.body" must contain {cursor}');
     }
+  }
+  if (p.type === 'next_url') {
+    if (!['http', 'embedded'].includes(r.strategy)) fail('pages.type next_url only works with strategy http or embedded');
+    if (!p.next_url_path || typeof p.next_url_path !== 'string') fail('"pages.next_url_path" (where the response carries the next page\'s URL) is required for pages.type next_url');
+    if (!(p.start || r.http?.url_template)) fail('"pages.start" (the first URL) is required for pages.type next_url');
   }
   if (p.type === 'param') {
     const tmpl = r.strategy === 'http' ? r.http?.url_template || p.template : p.template;
@@ -313,6 +318,19 @@ export function nextCursor(data, cursorPath, current) {
   if (Array.isArray(v)) v = v.filter((x) => x != null).pop();
   const end = v == null || v === '' || v === false || typeof v === 'object' || String(v) === String(current ?? '');
   return { value: end ? null : v, end };
+}
+
+// The next page's address, read from a response at pages.next_url_path ("links.next", "paging.next",
+// "next_page_url"). Relative values ("/api/items?page=2", "?page=2") resolve against the URL just fetched.
+// null = the list has ended: missing/empty/not a string, or pointing back at the page we are on.
+export function nextUrl(data, path, currentUrl) {
+  let v = getPath(data, path);
+  if (Array.isArray(v)) v = v.filter((x) => x != null).pop();
+  if (typeof v !== 'string' || !v.trim()) return null;
+  let abs;
+  try { abs = new URL(v.trim(), currentUrl).href; } catch { return null; }
+  if (!/^https?:$/.test(new URL(abs).protocol)) return null;
+  return abs === new URL(currentUrl).href ? null : abs;
 }
 
 // ---------- embedded JSON inside HTML ----------

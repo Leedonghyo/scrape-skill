@@ -58,6 +58,7 @@ When the collector stops on a block or login it writes `blocked_by: { vendor, ki
 | `next_link` | `start`, `next_selector`, `max_pages` | `dom`/`intercept` only; follows (or clicks, when it is a button) the next element until it disappears |
 | `scroll` | `start`, `max_rounds` (default 20), `idle_ms` (default 1500), `load_more_selector` (optional) | `dom`/`intercept` only; scrolls to the bottom (or clicks "load more") until the item count (for `intercept`: the number of captured responses) stops growing (`stopped_reason: scroll_idle`). `--max-pages` overrides `max_rounds`; `pages_done` reports rounds |
 | `cursor` | `cursor_path`, `start_cursor` (default empty), `max_pages` | `http`/`intercept` only; see "Cursor pagination" |
+| `next_url` | `start`, `next_url_path`, `max_pages` | `http`/`embedded` only; fetches `start`, then whatever URL the response gives at `next_url_path` (`links.next`, `paging.next`, `next_page_url`), relative URLs resolved against the page just fetched. Ends with `stopped_reason: no_next_url` when the value is missing, null, empty or points back to an already fetched page |
 
 Every type stops on an empty page (`stop_when_empty`, default true). "Empty" means zero rows after dedupe (`stopped_reason: empty_page` or `all_duplicates`). For `param`, an HTTP 404/410 counts as empty so numbered pagination ends cleanly; other non-2xx statuses are errors. `max_pages` defaults to 20 so a first run never surprises anyone. The CLI flag `--max-pages N` overrides the recipe's `max_pages` for that run.
 

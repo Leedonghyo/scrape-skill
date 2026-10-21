@@ -22,7 +22,7 @@ import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import {
   getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
-  csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, noiseRegex, UsageError,
+  csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, nextUrl, noiseRegex, UsageError,
 } from './lib.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -91,6 +91,10 @@ function fixtureServer(port = 0) {
     if (u.pathname === '/api/feed') {
       if (u.searchParams.has('cursor') && !u.searchParams.get('cursor')) return json(res, 400, { error: 'empty cursor' });
       return json(res, 200, feed(u.searchParams.get('cursor')));
+    }
+    if (u.pathname === '/api/links') { // next page given as a (relative) URL, like Django REST / GitHub-style "links.next"
+      const n = Number(u.searchParams.get('page') || 1);
+      return json(res, 200, { results: POSTS.slice((n - 1) * 5, n * 5), links: { next: n * 5 < POSTS.length ? `/api/links?page=${n + 1}` : null } });
     }
     if (u.pathname === '/graphql' && req.method === 'POST') {
       let body = '';
@@ -204,6 +208,11 @@ ok('nextCursor continues', eq(nextCursor({ meta: { next: 'c5' } }, 'meta.next', 
 ok('nextCursor ends on null / empty / missing', [{ next: null }, { next: '' }, {}].every((d) => nextCursor(d, 'next', 'c5').end));
 ok('nextCursor ends when the cursor did not move', nextCursor({ next: 'c5' }, 'next', 'c5').end === true);
 ok('nextCursor [] takes the last item cursor', nextCursor({ edges: [{ cursor: 'a' }, { cursor: 'b' }] }, 'edges[].cursor', 'a').value === 'b');
+ok('nextUrl absolute / relative / query-only', nextUrl({ links: { next: 'https://a.test/api?page=2' } }, 'links.next', 'https://a.test/api') === 'https://a.test/api?page=2' && nextUrl({ next: '/api?page=3' }, 'next', 'https://a.test/api?page=2') === 'https://a.test/api?page=3' && nextUrl({ next: '?page=4' }, 'next', 'https://a.test/api?page=3') === 'https://a.test/api?page=4');
+ok('nextUrl ends on null / empty / same page / non-http', [{ next: null }, { next: '' }, {}, { next: 'https://a.test/api?page=2' }, { next: 'javascript:void(0)' }, { next: 7 }].every((d) => nextUrl(d, 'next', 'https://a.test/api?page=2') === null));
+ok('validate next_url', (() => { try { validateRecipe({ version: 1, name: 'x', strategy: 'http', pages: { type: 'next_url', start: 'https://a.test/api', next_url_path: 'links.next' }, fields: {} }); return true; } catch { return false; } })());
+throws('validate next_url needs next_url_path', () => validateRecipe({ version: 1, name: 'x', strategy: 'http', pages: { type: 'next_url', start: 'https://a.test/api' }, fields: {} }));
+throws('validate next_url not for dom', () => validateRecipe({ version: 1, name: 'x', strategy: 'dom', pages: { type: 'next_url', start: 'https://a.test/', next_url_path: 'n' }, fields: {} }));
 const curRecipe = (over) => ({ version: 1, name: 'x', strategy: 'http', pages: { type: 'cursor', cursor_path: 'next' }, http: { url_template: 'https://a.test/f?c={cursor}' }, fields: {}, ...over });
 ok('validate cursor ok (url, body, intercept)', (() => { try {
   validateRecipe(curRecipe());
@@ -234,6 +243,7 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
     entry('GET', `https://shop.test/api/search?q=keyboard&page=1&api_key=${SECRETS.key}`, products(1), { ...auth, encoding: 'base64' }),
     entry('GET', `https://shop.test/api/search?q=keyboard&page=2&api_key=${SECRETS.key}`, products(6), auth),
     entry('GET', 'https://shop.test/api/items/123456/reviews', undefined),
+    entry('GET', 'https://shop.test/api/v2/orders?limit=3', { results: [{ id: 1, total: 5 }, { id: 2, total: 6 }, { id: 3, total: 7 }], links: { next: 'https://shop.test/api/v2/orders?limit=3&page=2' } }),
     entry('POST', 'https://shop.test/graphql', posts(SECRETS.cur1), { post: gql(null) }),
     entry('POST', 'https://shop.test/graphql', posts(SECRETS.cur2), { post: gql(SECRETS.cur1) }),
   ] } };
@@ -252,7 +262,9 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
   const g = c.find((x) => x.graphql_operation === 'Posts') || {};
   const leaked = Object.entries(SECRETS).filter(([, v]) => res.output.includes(v) || res.output.includes(Buffer.from(v).toString('base64'))).map(([k]) => k);
   ok('noiseRegex comes from helpers.js', noiseRegex().test('www.google-analytics.com') && !noiseRegex().test('shop.test/api/search'));
-  ok('har-scan: last stdout line is a JSON summary', res.code === 0 && res.summary.ok === true && res.summary.entries === 8, { code: res.code });
+  ok('har-scan: last stdout line is a JSON summary', res.code === 0 && res.summary.ok === true && res.summary.entries === 9, { code: res.code });
+  const nu = c.find((x) => /\/api\/v2\/orders/.test(x.url_pattern)) || {};
+  ok('har-scan: a next-page URL in the response → http + next_url', nu.paging?.next_url_path === 'links.next' && nu.paging.cursor_path === null && nu.recommend?.strategy === 'http' && nu.recommend.pages === 'next_url', nu.paging);
   ok('har-scan: --match ranks the data API first', top.method === 'GET' && /shop\.test\/api\/search/.test(top.url_pattern || '') && top.match === true && res.summary.match?.found === true, top.url_pattern);
   ok('har-scan: array path in [] grammar + item keys', top.items_path === 'data.items[]' && top.rows === 5 && eq(top.item_keys, ['id', 'title', 'price', 'url']), { path: top.items_path, keys: top.item_keys });
   ok('har-scan: URL pattern masks page and secrets', (top.url_pattern || '').includes('page={n}') && (top.url_pattern || '').includes('api_key={secret}') && top.paging?.page_param === 'query:page' && top.calls === 2, top.url_pattern);
@@ -433,6 +445,8 @@ if (!offline) {
     ['local-cursor', local('local-cursor'), [], 20, (s) => s.rows === 20 && s.pages_done === 4 && s.stopped_reason === 'cursor_end'],
     // the same feed as a GraphQL POST: {cursor} inside http.body (null on the first page); concurrency is ignored
     ['local-cursor-graphql', local(GQL), [], 20, (s) => s.rows === 20 && s.stopped_reason === 'cursor_end'],
+    // next_url: follow links.next (relative) until it is null
+    ['local-next-url', local({ version: 1, name: 'local-next-url', strategy: 'http', pages: { type: 'next_url', start: `${FIXTURE_ORIGIN}/api/links`, next_url_path: 'links.next' }, items: { path: 'results[]' }, fields: { id: 'id', title: 'title' }, rate: { delay_ms: 100, jitter_ms: 50 } }), [], 20, (s) => s.rows === 20 && s.pages_done === 4 && s.stopped_reason === 'no_next_url'],
     // intercept + cursor: the page pages itself through "more"; the cursor only tells us when to stop
     // param pages whose tail lazy-loads: wait.scroll brings each page from 10 to 20 items
     ['local-lazy-scroll', local(LAZY), [], 40, (s) => s.rows === 40 && s.pages_done === 3 && s.stopped_reason === 'empty_page'],

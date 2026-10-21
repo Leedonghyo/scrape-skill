@@ -23,7 +23,7 @@ const ARGS = { match: 'string', limit: 'number', help: 'boolean' };
 const PAGE_NAME = /^(page|p|pg|pageno|pagenum|page_?no|page_?number|page_?index|current_?page|offset|start|skip|from)$/i;
 const CURSOR_NAME = /^(cursor|after|before|next|next_?cursor|end_?cursor|next_?token|page_?token|next_?page_?token|continuation|continuation_?token|scroll_?id|since_?id|max_?id|marker|start_?after|starting_?after|last_?id|last_?key)$/i;
 // Where a response says "continue here". Order = preference when several keys exist.
-const NEXT_KEYS = [/^next_?cursor$/i, /^end_?cursor$/i, /^next_?page_?token$/i, /^next_?token$/i, /^continuation(_?token)?$/i, /^(next_?max_?id|scroll_?id|paging_?token|last_?evaluated_?key|last_?key)$/i, /^cursor$/i, /^(next|after)$/i];
+const NEXT_KEYS = [/^next_?(page_?)?(url|link|href)$/i, /^next_?cursor$/i, /^end_?cursor$/i, /^next_?page_?token$/i, /^next_?token$/i, /^continuation(_?token)?$/i, /^(next_?max_?id|scroll_?id|paging_?token|last_?evaluated_?key|last_?key)$/i, /^cursor$/i, /^(next|after)$/i];
 const SECRET_NAME = /(^|[_-])(token|key|apikey|auth|authorization|sig|sign|signature|secret|session|sessionid|sid|password|passwd|pwd|jwt|credential|hmac|nonce|csrf|xsrf|ticket)([_-]|$)|(token|key|secret|signature)$/i;
 const BORING_HEADER = /^(:.*|accept|accept-encoding|accept-language|user-agent|connection|host|content-length|cache-control|pragma|dnt|priority|te|upgrade-insecure-requests|sec-.*|if-none-match|if-modified-since|range)$/i;
 const CREDENTIAL_HEADER = /^(authorization|proxy-authorization|cookie|x-api-key|api-key|apikey)$|token|auth|csrf|xsrf|session/i;
@@ -203,7 +203,7 @@ export function scanHar(har, { match, limit = 10 } = {}) {
     // Cursor evidence: a value some response returned shows up in another request to the same endpoint.
     const nexts = g.all.map((x) => x.next).filter((n) => n && n.value != null && n.value !== '');
     const next = c.next || g.all.map((x) => x.next).find(Boolean) || null;
-    const nextIsUrl = nexts.some((n) => /^https?:\/\//i.test(String(n.value)));
+    const nextIsUrl = nexts.some((n) => /^(https?:\/\/|\/|\?)/i.test(String(n.value)));
     const confirmed = nexts.some((n) => String(n.value).length >= 2 && g.all.some((x) => x.req.haystack.includes(String(n.value))));
     const cursorParam = g.all.map((x) => x.req.cursorParam).find(Boolean) || null;
     const pageParam = g.all.map((x) => x.req.pageParam).find(Boolean) || null;
@@ -216,7 +216,7 @@ export function scanHar(har, { match, limit = 10 } = {}) {
     if (!guarded && r.credentials.length) why.push(`sent with credentials (${r.credentials.join(', ')}): try http with the exported session and confirm with probe-http, else intercept`);
     if (!guarded && !r.credentials.length) why.push('no credentials or computed headers seen: confirm with probe-http');
     if (cursor) why.push(`cursor ${confirmed ? 'round-trip seen' : 'suspected'}: response ${next.path} → request ${cursorParam ? `${cursorParam.in} ${cursorParam.name}` : 'parameter'}`);
-    if (nextIsUrl) why.push(`response ${next.path} is a full next-page URL, not a cursor value: use intercept with scroll/next_link`);
+    if (nextIsUrl) why.push(`response ${next.path} is the next page's URL: pages.type next_url with next_url_path ${next.path}${guarded ? ' (the request is guarded, so intercept with scroll/next_link instead)' : ''}`);
     const out = {
       score,
       method: r.method,
@@ -231,10 +231,11 @@ export function scanHar(har, { match, limit = 10 } = {}) {
         page_param: pageParam ? `${pageParam.in}:${pageParam.name}` : null,
         cursor_param: cursorParam ? `${cursorParam.in}:${cursorParam.name}` : null,
         cursor_path: next && !nextIsUrl ? next.path : null,
+        next_url_path: next && nextIsUrl ? next.path : null,
         cursor_confirmed: !!cursor && confirmed,
       },
       headers: r.headers,
-      recommend: { strategy: guarded || nextIsUrl ? 'intercept' : 'http', pages: nextIsUrl ? 'scroll' : pages, why: why.join('; ') },
+      recommend: { strategy: guarded ? 'intercept' : 'http', pages: nextIsUrl ? (guarded ? 'scroll' : 'next_url') : pages, why: why.join('; ') },
     };
     if (hit) out.match = g.all.some((x) => x.matched);
     if (c.other_arrays.length) out.other_arrays = c.other_arrays;

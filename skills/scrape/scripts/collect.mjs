@@ -17,7 +17,7 @@ import {
   UsageError, EnvError, BlockedError,
   expandHome, sleep, isEmpty, hasAnyValue, shorten, localDate, jittered, parseArgs, loadRecipe,
   defaultHeaders, mergeHeaders, loadStorageState, cookieHeader, detectBlockedHttp,
-  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse, cursorUrl, fillBody, nextCursor,
+  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse, cursorUrl, fillBody, nextCursor, nextUrl,
 } from './lib.mjs';
 
 const USAGE = `usage: node collect.mjs <recipe.json | recipe-name> [--max-pages N] [--limit N] [--dry-run] [--out PATH]
@@ -174,6 +174,7 @@ class Collector {
         return { url: tmpl.replaceAll('{n}', String(n)), n };
       }
       case 'next_link': return i === 0 ? { url: r.url || p.start } : prev?.next ? prev.next : null;
+      case 'next_url': return i === 0 ? { url: r.url || p.start || this.recipe.http?.url_template } : prev?.nextUrl ? { url: prev.nextUrl } : null;
       case 'cursor': { // http only; each request needs the cursor the previous response returned
         if (i > 0 && (!prev || prev.cursorEnd)) return null;
         const value = i === 0 ? r.value ?? p.start_cursor ?? '' : prev.nextCursor;
@@ -189,6 +190,7 @@ class Collector {
       case 'param': return { n: target.n + (this.pages.step ?? 1) };
       case 'next_link': return result.next ? { url: result.next.url || result.pageUrl } : null;
       case 'cursor': return result.cursorEnd ? null : { value: result.nextCursor };
+      case 'next_url': return result.nextUrl ? { url: result.nextUrl } : null;
       default: return null;
     }
   }
@@ -200,7 +202,7 @@ class Collector {
     // intercept + cursor: the page pages itself (scroll / "load more"); we only watch the cursor to know when it ends.
     if (type === 'scroll' || (type === 'cursor' && this.recipe.strategy === 'intercept')) return this.runScroll(maxPages);
     if (type === 'cursor' && (this.rate.concurrency || 1) > 1) this.log('cursor pagination is sequential; ignoring rate.concurrency');
-    const endReason = type === 'next_link' ? 'no_next_link' : type === 'cursor' ? 'cursor_end' : 'end_of_list';
+    const endReason = type === 'next_link' ? 'no_next_link' : type === 'next_url' ? 'no_next_url' : type === 'cursor' ? 'cursor_end' : 'end_of_list';
     const stopWhenEmpty = this.pages.stop_when_empty !== false;
     const total = type === 'single' ? 1 : type === 'urls' ? Math.min(this.pages.urls.length - (this.resumeFrom?.cursor?.index || 0), maxPages) : maxPages;
     // http pages are independent, so rate.concurrency can fetch a window of them at once (one pause per window).
@@ -212,7 +214,7 @@ class Collector {
       if (this.aborted) { this.stop = 'interrupted'; break; }
       const target = this.targetAt(i, prev);
       if (!target) { this.stop = endReason; break; }
-      if (target.url && visited.has(target.url) && type === 'next_link') { this.stop = 'no_next_link'; break; }
+      if (target.url && visited.has(target.url) && (type === 'next_link' || type === 'next_url')) { this.stop = endReason; break; } // a next link pointing back = the end, not a loop
       visited.add(target.url);
       this.cursor = type === 'param' ? { n: target.n } : type === 'urls' ? { index: target.index } : type === 'cursor' ? { value: target.cursorValue } : { url: target.url };
       let result;
@@ -416,6 +418,7 @@ class Collector {
     if (res.status === 404 || res.status === 410) return { rows: [] }; // past the last page: let stop_when_empty end the run
     const data = isHttp ? this.parseJson(res) : extractEmbedded(res.text, r.embedded.source);
     const out = { rows: jsonRows(data, r.items, r.fields) };
+    if (this.pages.type === 'next_url') out.nextUrl = nextUrl(data, this.pages.next_url_path, res.url || target.url);
     if (this.pages.type === 'cursor') {
       const c = nextCursor(data, this.pages.cursor_path, target.cursorValue);
       out.nextCursor = c.value;
