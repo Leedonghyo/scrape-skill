@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import zlib from 'node:zlib';
 
 export const SCRIPTS_DIR = fileURLToPath(new URL('.', import.meta.url));
 export const HELPERS_PATH = path.join(SCRIPTS_DIR, 'page', 'helpers.js');
@@ -114,6 +115,10 @@ export function validateRecipe(r) {
     if (!m || typeof m !== 'string') fail('"intercept.url_match" (a regex tested against response URLs) is required for strategy intercept');
     try { new RegExp(m); } catch (e) { fail(`"intercept.url_match" is not a valid regex: ${e.message}`); }
     if (r.intercept.channel != null && !['http', 'websocket', 'sse'].includes(r.intercept.channel)) fail('"intercept.channel" must be http, websocket or sse');
+    const w = r.intercept.where;
+    if (w != null && (typeof w !== 'object' || Array.isArray(w) || !Object.keys(w).length)) fail('"intercept.where" must be an object of { "path": value or [values] }');
+    const br = r.intercept.binary_records;
+    if (br != null && !(br && [1, 2, 4].includes(br.length_bytes) && (br.type_bytes ?? 0) >= 0 && (br.type_bytes ?? 0) <= 4)) fail('"intercept.binary_records" must be { "length_bytes": 1|2|4, "type_bytes": 0-4 }');
     if (r.intercept.channel && r.intercept.channel !== 'http' && p.type === 'cursor') fail('pages.type cursor reads responses; it does not work with intercept.channel websocket/sse');
   }
   if (r.detail) {
@@ -221,6 +226,8 @@ export function noiseRegex() {
 }
 
 // ---------- JSON paths and fields (grammar identical to page/helpers.js getPath) ----------
+// "[]" on a single object treats it as a one-item list: APIs (and schema-less protobuf, where a repeated field
+// seen once is not an array) often send one item without the array around it.
 export function getPath(obj, p) {
   if (!p || p === '$') return obj;
   const segs = p.replace(/\[(\d+)\]/g, '.$1').replace(/\[\]/g, '.[]').split('.').filter(Boolean);
@@ -230,7 +237,7 @@ export function getPath(obj, p) {
     if (cur == null) return undefined;
     if (s === '[]') {
       const rest = segs.slice(i + 1).join('.');
-      return Array.isArray(cur) ? cur.map((x) => getPath(x, rest)) : undefined;
+      return Array.isArray(cur) ? cur.map((x) => getPath(x, rest)) : typeof cur === 'object' ? [getPath(cur, rest)] : undefined;
     }
     cur = cur[s];
   }
@@ -333,6 +340,97 @@ export function nextUrl(data, path, currentUrl) {
   try { abs = new URL(v.trim(), currentUrl).href; } catch { return null; }
   if (!/^https?:$/.test(new URL(abs).protocol)) return null;
   return abs === new URL(currentUrl).href ? null : abs;
+}
+
+// intercept.where: keep a captured message only when every path holds the wanted value (or one of a list of
+// values), compared as strings so 2 and "2" match. One socket often mixes trades, order books and tickers.
+export function messageMatches(data, where) {
+  if (!where) return true;
+  return Object.entries(where).every(([p, want]) => {
+    const got = getPath(data, p);
+    return (Array.isArray(want) ? want : [want]).some((w) => String(w) === String(got));
+  });
+}
+
+// ---------- binary WebSocket messages ----------
+// Schema-less Protocol Buffers decoding, the same idea as `protoc --decode_raw`: without the site's .proto file
+// there are no field names, so each message becomes an object keyed by field NUMBER ("1", "2", …) and recipe
+// paths read like "2.1". A field that occurs more than once becomes an array. Wire types are ambiguous without
+// a schema, so: varint → integer (string when beyond 2^53); 64/32-bit → integer when the high bytes are zero
+// (timestamps, ids), else double/float; length-delimited → printable UTF-8 text as a string, else a nested
+// message if it parses completely, else "base64:…". Throws when the bytes are not a well-formed message.
+export function decodeProtobuf(buf, depth = 0) {
+  if (depth > 24) throw new Error('protobuf nesting too deep');
+  const out = {};
+  let i = 0;
+  const varint = () => {
+    let r = 0n;
+    for (let s = 0n; s < 70n; s += 7n) {
+      if (i >= buf.length) throw new Error('truncated varint');
+      const b = buf[i++];
+      r |= BigInt(b & 0x7f) << s;
+      if (!(b & 0x80)) return r;
+    }
+    throw new Error('varint too long');
+  };
+  const need = (n) => { if (i + n > buf.length) throw new Error('truncated field'); };
+  while (i < buf.length) {
+    const key = varint();
+    const field = Number(key >> 3n);
+    const wt = Number(key & 7n);
+    if (field < 1 || field > 536870911) throw new Error('bad field number');
+    let v;
+    if (wt === 0) { const n = varint(); v = n <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(n) : n.toString(); }
+    else if (wt === 1) { need(8); v = buf.readUInt16LE(i + 6) === 0 ? Number(buf.readBigUInt64LE(i)) : buf.readDoubleLE(i); i += 8; }
+    else if (wt === 5) { need(4); v = buf[i + 3] === 0 ? buf.readUInt32LE(i) : Math.fround(buf.readFloatLE(i)); i += 4; }
+    else if (wt === 2) {
+      const len = Number(varint());
+      need(len);
+      const sub = buf.subarray(i, i + len);
+      i += len;
+      const text = sub.toString('utf8');
+      if (!sub.length || (!/[\u0000-\u001f\u007f\ufffd]/.test(text))) v = text;
+      else { try { v = decodeProtobuf(sub, depth + 1); } catch { v = 'base64:' + sub.toString('base64'); } }
+    } else throw new Error(`unsupported wire type ${wt}`);
+    const k = String(field);
+    if (!(k in out)) out[k] = v;
+    else if (Array.isArray(out[k])) out[k].push(v);
+    else out[k] = [out[k], v];
+  }
+  return out;
+}
+
+// One binary frame → the messages in it (each an object), or [] when nothing could be read.
+// gzip/zlib-compressed frames are inflated first; JSON (also Socket.IO-prefixed) wins over protobuf.
+// records: { length_bytes, type_bytes } for frames that pack several length-prefixed records (big-endian
+// length that counts the type bytes, then the type, then one protobuf message); the type lands in "_type".
+export function decodeBinaryFrame(buf, records) {
+  let b = Buffer.from(buf);
+  try {
+    if (b[0] === 0x1f && b[1] === 0x8b) b = zlib.gunzipSync(b);
+    else if (b[0] === 0x78 && [0x01, 0x5e, 0x9c, 0xda].includes(b[1])) b = zlib.inflateSync(b);
+  } catch { return []; }
+  const json = tryParse(b.toString('utf8').replace(/^\d+(?=[[{])/, ''));
+  if (json && typeof json === 'object') return [json];
+  const parts = [];
+  if (records) {
+    const lb = records.length_bytes;
+    const tb = records.type_bytes || 0;
+    for (let i = 0; i + lb <= b.length;) {
+      const len = lb === 4 ? b.readUInt32BE(i) : lb === 2 ? b.readUInt16BE(i) : b[i];
+      if (len < tb || i + lb + len > b.length) return []; // not this framing after all
+      parts.push({ type: tb ? b.readUIntBE(i + lb, tb) : undefined, body: b.subarray(i + lb + tb, i + lb + len) });
+      i += lb + len;
+    }
+  } else parts.push({ body: b });
+  const out = [];
+  for (const p of parts) {
+    try {
+      const msg = decodeProtobuf(p.body);
+      out.push(p.type === undefined ? msg : { _type: p.type, ...msg });
+    } catch { /* not protobuf: skipped and counted by the caller */ }
+  }
+  return out;
 }
 
 // ---------- embedded JSON inside HTML ----------

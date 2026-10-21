@@ -20,10 +20,11 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import vm from 'node:vm';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
   getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
-  csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, nextUrl, noiseRegex, UsageError,
+  csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, nextUrl, noiseRegex, decodeProtobuf, decodeBinaryFrame, messageMatches, UsageError,
 } from './lib.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
@@ -98,6 +99,10 @@ function fixtureServer(port = 0) {
   const ws = new WebSocket('ws://' + location.host + '/ws/prices');
   ws.onmessage = (m) => { const li = document.createElement('li'); li.textContent = m.data; document.getElementById('l').appendChild(li); };
 </script></body></html>`);
+    if (u.pathname === '/live-bin') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture binary</title></head><body><h1>Live trades</h1><p id="n">0</p><script>
+  const ws = new WebSocket('ws://' + location.host + '/ws/binary'); ws.binaryType = 'arraybuffer';
+  ws.onmessage = () => { const n = document.getElementById('n'); n.textContent = Number(n.textContent) + 1; };
+</script></body></html>`);
     if (u.pathname === '/stream') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture stream</title></head><body><h1>Live scores</h1><ul id="l"></ul><script>
   const es = new EventSource('/events');
   es.onmessage = (m) => { const li = document.createElement('li'); li.textContent = m.data; document.getElementById('l').appendChild(li); };
@@ -140,13 +145,26 @@ function fixtureServer(port = 0) {
     return send(res, 404, 'text/plain', 'not found');
   });
   // Minimal WebSocket server (RFC 6455 handshake + unmasked text frames), enough for the page above.
-  const wsFrame = (text) => { const b = Buffer.from(text); return Buffer.concat([b.length < 126 ? Buffer.from([0x81, b.length]) : Buffer.from([0x81, 126, b.length >> 8, b.length & 255]), b]); };
+  const wsFrame = (data) => { const b = Buffer.from(data); const op = typeof data === 'string' ? 0x81 : 0x82; return Buffer.concat([b.length < 126 ? Buffer.from([op, b.length]) : Buffer.from([op, 126, b.length >> 8, b.length & 255]), b]); };
+  // Upbit-style binary feed: frames pack [u32 length][u8 type][protobuf] records; type 2 = trade, 3 = something else.
+  // trade = { 1: { 1: market }, 2: price (varint), 3: volume (double) }
+  const vint = (n) => { const o = []; do { let b = n % 128; n = Math.floor(n / 128); if (n) b |= 0x80; o.push(b); } while (n); return Buffer.from(o); };
+  const ld = (f, buf) => Buffer.concat([vint((f << 3) | 2), vint(buf.length), buf]);
+  const dbl = (f, x) => { const b = Buffer.alloc(8); b.writeDoubleLE(x); return Buffer.concat([vint((f << 3) | 1), b]); };
+  const trade = (m, price, vol) => Buffer.concat([ld(1, ld(1, Buffer.from(m))), vint(2 << 3), vint(price), dbl(3, vol)]);
+  const rec = (type, body) => { const h = Buffer.alloc(5); h.writeUInt32BE(body.length + 1); h[4] = type; return Buffer.concat([h, body]); };
+  const binFrames = [
+    Buffer.concat([rec(2, trade('KRW-BTC', 110173000, 0.0187)), rec(3, ld(1, ld(1, Buffer.from('KRW-BTC'))))]),
+    rec(2, trade('KRW-ETH', 3253000, 1.5)),
+    zlib.gzipSync(rec(2, trade('KRW-XRP', 812, 2500))), // compressed frames are inflated first
+    Buffer.from([0xff, 0xfe, 0xfd]), // garbage: skipped and counted
+  ];
   server.on('upgrade', (req, socket) => {
     socket.on('error', () => {});
-    if (!req.url.startsWith('/ws/prices')) return socket.destroy();
+    if (!req.url.startsWith('/ws/prices') && !req.url.startsWith('/ws/binary')) return socket.destroy();
     const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
-    const msgs = ['{"type":"ping"}', '42["tick",{"symbol":"AAA","price":101.5}]', '42["tick",{"symbol":"BBB","price":202}]', '42["tick",{"symbol":"CCC","price":303}]'];
+    const msgs = req.url.startsWith('/ws/binary') ? binFrames : ['{"type":"ping"}', '42["tick",{"symbol":"AAA","price":101.5}]', '42["tick",{"symbol":"BBB","price":202}]', '42["tick",{"symbol":"CCC","price":303}]'];
     msgs.forEach((m, i) => setTimeout(() => socket.writable && socket.write(wsFrame(m)), 150 * (i + 1)));
     setTimeout(() => socket.destroy(), 3000);
     return undefined;
@@ -422,6 +440,30 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
   fs.rmSync(f, { force: true });
 }
 
+// binary WebSocket frames: schema-less protobuf, compression, length-prefixed records
+{
+  // hand-encoded protobuf: 1: {1: "KRW-BTC", 3: 1792556813727}, 2: 110173000 (varint), 3: 0.0187 (double), 4: two repeated sub-messages
+  const vint = (n) => { const o = []; let v = BigInt(n); do { let b = Number(v & 0x7fn); v >>= 7n; if (v) b |= 0x80; o.push(b); } while (v); return Buffer.from(o); };
+  const tag = (f, wt) => vint((f << 3) | wt);
+  const ld = (f, buf) => Buffer.concat([tag(f, 2), vint(buf.length), buf]);
+  const dbl = (f, x) => { const b = Buffer.alloc(8); b.writeDoubleLE(x); return Buffer.concat([tag(f, 1), b]); };
+  const u64 = (f, x) => { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(x)); return Buffer.concat([tag(f, 1), b]); };
+  const market = ld(1, Buffer.concat([ld(1, Buffer.from('KRW-BTC')), u64(3, 1792556813727)]));
+  const level = (p, q) => Buffer.concat([tag(1, 0), vint(p), dbl(2, q)]);
+  const msg = Buffer.concat([market, tag(2, 0), vint(110173000), dbl(3, 0.0187), ld(4, level(110174000, 0.5)), ld(4, level(110175000, 1.25)), ld(5, Buffer.from('110170000.0000'))]);
+  const d = decodeProtobuf(msg);
+  ok('protobuf: nested message, varint, double, uint64, text, repeated', eq(d, { 1: { 1: 'KRW-BTC', 3: 1792556813727 }, 2: 110173000, 3: 0.0187, 4: [{ 1: 110174000, 2: 0.5 }, { 1: 110175000, 2: 1.25 }], 5: '110170000.0000' }), d);
+  throws('protobuf: random bytes are rejected', () => decodeProtobuf(Buffer.from([0x0f, 0xff, 0x01])));
+  ok('binary frame: gzip + protobuf', eq(decodeBinaryFrame(zlib.gzipSync(msg))[0][2], 110173000));
+  ok('binary frame: JSON sent as bytes', eq(decodeBinaryFrame(Buffer.from('{"a":1}')), [{ a: 1 }]));
+  const rec = (type, body) => { const h = Buffer.alloc(5); h.writeUInt32BE(body.length + 1); h[4] = type; return Buffer.concat([h, body]); };
+  const packed = decodeBinaryFrame(Buffer.concat([rec(2, msg), rec(6, market)]), { length_bytes: 4, type_bytes: 1 });
+  ok('binary frame: length-prefixed records → one message each with _type', packed.length === 2 && packed[0]._type === 2 && packed[0][2] === 110173000 && packed[1]._type === 6, packed.map((m) => m._type));
+  ok('binary frame: undecodable → []', decodeBinaryFrame(Buffer.from([0xff, 0xff, 0xff])).length === 0);
+  ok('[] on a single object = a one-item list', eq(jsonRows({ 2: { 1: 'KRW-BTC', 3: '1' } }, { path: '2[]' }, { m: '1' }), [{ m: 'KRW-BTC' }]) && eq(getPath({ a: [{ b: 1 }] }, 'a[].b'), [1]));
+  ok('messageMatches: where on paths, strings or numbers, value lists', messageMatches({ _type: 2 }, { _type: '2' }) && messageMatches({ e: { t: 'trade' } }, { 'e.t': ['trade', 'fill'] }) && !messageMatches({ _type: 3 }, { _type: 2 }) && messageMatches({}, null));
+}
+
 // csvCell quoting + array join
 ok('csv plain', csvCell('abc') === 'abc');
 ok('csv quote comma', csvCell('a,b') === '"a,b"');
@@ -500,6 +542,8 @@ if (!offline) {
     ['local-next-url', local({ version: 1, name: 'local-next-url', strategy: 'http', pages: { type: 'next_url', start: `${FIXTURE_ORIGIN}/api/links`, next_url_path: 'links.next' }, items: { path: 'results[]' }, fields: { id: 'id', title: 'title' }, rate: { delay_ms: 100, jitter_ms: 50 } }), [], 20, (s) => s.rows === 20 && s.pages_done === 4 && s.stopped_reason === 'no_next_url'],
     // intercept over a WebSocket: Socket.IO prefix stripped, the ping maps to an empty row and is dropped
     ['local-intercept-ws', local({ version: 1, name: 'local-intercept-ws', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/live` }, intercept: { url_match: '/ws/prices', channel: 'websocket', listen_ms: 1500 }, items: { path: '[1]' }, fields: { symbol: 'symbol', price: 'price' } }), [], 3, (s) => s.rows === 3 && s.intercepted === 4 && s.sample[0].symbol === 'AAA' && s.sample[0].price === 101.5],
+    // binary WebSocket: length-prefixed protobuf records (one gzip-compressed), only trades kept via where
+    ['local-intercept-ws-binary', local({ version: 1, name: 'local-intercept-ws-binary', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/live-bin` }, intercept: { url_match: '/ws/binary', channel: 'websocket', listen_ms: 1500, binary_records: { length_bytes: 4, type_bytes: 1 }, where: { _type: 2 } }, fields: { 마켓: '1.1', 가격: '2', 수량: '3' } }), [], 3, (s) => s.rows === 3 && s.intercepted === 4 && eq(s.sample[0], { 마켓: 'KRW-BTC', 가격: 110173000, 수량: 0.0187 }) && s.sample[2]['마켓'] === 'KRW-XRP'],
     // intercept over Server-Sent Events (EventSource)
     ['local-intercept-sse', local({ version: 1, name: 'local-intercept-sse', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/stream` }, intercept: { url_match: '/events', channel: 'sse', listen_ms: 1500 }, fields: { team: 'team', score: 'score' } }), [], 3, (s) => s.rows === 3 && s.intercepted === 3 && s.sample[2].score === 3],
     // intercept + cursor: the page pages itself through "more"; the cursor only tells us when to stop

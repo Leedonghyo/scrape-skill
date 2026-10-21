@@ -406,7 +406,7 @@
       if (cur == null) return undefined;
       if (s === '[]') {
         const rest = segs.slice(i + 1).join('.');
-        return Array.isArray(cur) ? cur.map((x) => getPath(x, rest)) : undefined;
+        return Array.isArray(cur) ? cur.map((x) => getPath(x, rest)) : typeof cur === 'object' ? [getPath(cur, rest)] : undefined; // one object = a one-item list
       }
       cur = cur[s];
     }

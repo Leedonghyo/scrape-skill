@@ -17,7 +17,7 @@ import {
   UsageError, EnvError, BlockedError,
   expandHome, sleep, isEmpty, hasAnyValue, shorten, localDate, jittered, parseArgs, loadRecipe,
   defaultHeaders, mergeHeaders, loadStorageState, cookieHeader, detectBlockedHttp,
-  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse, cursorUrl, fillBody, nextCursor, nextUrl,
+  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse, cursorUrl, fillBody, nextCursor, nextUrl, decodeBinaryFrame, messageMatches,
 } from './lib.mjs';
 
 const USAGE = `usage: node collect.mjs <recipe.json | recipe-name> [--max-pages N] [--limit N] [--dry-run] [--out PATH]
@@ -383,13 +383,22 @@ class Collector {
   // Live data that never arrives as an HTTP response: WebSocket frames (prices, scores, chat) and Server-Sent
   // Events (EventSource). Each JSON message is one input to items.path/fields, like one response. Messages are
   // not deduplicated (two equal ticks are two events); heartbeats map to all-empty rows and are dropped.
+  // Binary frames (many exchanges) are inflated when compressed and read as JSON or schema-less protobuf
+  // (decodeBinaryFrame); intercept.binary_records splits frames that pack several length-prefixed records.
   // Read-only: the page opens and feeds the connection itself, nothing is sent on it.
   async captureStream(page, re, channel) {
-    const cap = { hits: [], matched: 0, pending: new Set(), inflight: new Set(), denied: null, stream: true };
+    const cap = { hits: [], matched: 0, pending: new Set(), inflight: new Set(), denied: null, stream: true, undecoded: 0 };
+    const records = this.recipe.intercept.binary_records || null;
     let seq = 0;
     let active = true;
     const keep = (url, raw) => {
       if (!active) return;
+      if (Buffer.isBuffer(raw)) {
+        const msgs = decodeBinaryFrame(raw, records);
+        if (!msgs.length) cap.undecoded++;
+        for (const data of msgs) cap.hits.push({ seq: seq++, url, data });
+        return;
+      }
       // Socket.IO / Engine.IO frames carry a numeric packet type before the JSON: 42["tick",{...}]
       const data = tryParse(String(raw).replace(/^\d+(?=[[{])/, ''));
       if (data === undefined || data === null || typeof data !== 'object') return;
@@ -399,7 +408,7 @@ class Collector {
       const onSocket = (ws) => {
         if (!re.test(ws.url())) return;
         cap.matched++;
-        ws.on('framereceived', (f) => keep(ws.url(), typeof f.payload === 'string' ? f.payload : f.payload.toString('utf8')));
+        ws.on('framereceived', (f) => keep(ws.url(), f.payload));
       };
       page.on('websocket', onSocket);
       cap.stop = () => { active = false; page.off('websocket', onSocket); };
@@ -428,6 +437,7 @@ class Collector {
         const end = Date.now() + (this.recipe.intercept.listen_ms ?? INTERCEPT_LISTEN_MS);
         while (Date.now() < end && !this.aborted) await sleep(100);
         if (!cap.matched) this.log(`no ${this.recipe.intercept.channel} connection matched intercept.url_match on ${shorten(page.url(), 80)}`);
+        if (cap.undecoded) this.log(`${cap.undecoded} binary frame(s) were neither JSON nor protobuf (or need intercept.binary_records) and were skipped`);
       }
       const hits = cap.hits.splice(0);
       this.responses += hits.length;
@@ -455,7 +465,10 @@ class Collector {
     return hits;
   }
 
-  hitRows(hits) { return hits.flatMap((h) => jsonRows(h.data, this.recipe.items, this.recipe.fields)); }
+  hitRows(hits) {
+    const where = this.recipe.intercept?.where;
+    return hits.filter((h) => messageMatches(h.data, where)).flatMap((h) => jsonRows(h.data, this.recipe.items, this.recipe.fields));
+  }
 
   async jsonPage(target, pause) {
     if (pause) await this.pause();
