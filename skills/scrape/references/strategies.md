@@ -44,9 +44,13 @@ The browser shows the JSON call, but `probe-http.mjs` on the same URL returns 40
 
 The preview for the user is still DOM-based (`extract`/`highlight` on the rendered list), as with `http`. If even the browser's own call comes back 403, the collector stops with `blocked`; continue with the block ladder in SKILL.md.
 
-### Source maps as a map of the API
+### Endpoints in the site's own code
 
-When the list is rendered by a bundle and the network panel shows nothing useful yet (the call only fires after a login, a filter or a later page), a published source map can list the endpoints. `sourceMapHints()` returns the page's script URLs and the conventional map location for each (`<script url>.map`) without requesting anything; the authoritative pointer is the `//# sourceMappingURL=` comment on the script's last line. If a `.map` is publicly served, fetch it and search its `sourcesContent` strings for `fetch(`, `axios`, `/api/`, `graphql` to collect endpoint candidates (paths, query parameter names, GraphQL operation names). A 404 is the normal answer in production; do not guess further URLs.
+When the list is rendered by a bundle and the network panel shows nothing useful yet (the call only fires after a login, a filter or a later page), the site's JavaScript still names its endpoints.
+
+`await window.__scrape.apiCandidates()` reads the scripts this page already loaded from the same site (same origin or a sibling host like `static.site.com`; at most 20 files and 3 MB, mostly served from the browser cache), plus inline scripts and `hx-get`/`data-url`/`form[action]` attributes, and returns endpoint-looking strings (`/api/v2/products?page={var}`, `https://api.site.com/search`) with `fetch_call: true` when a `fetch(`/`axios`/`$.ajax` call sits right before them, and GraphQL operation names (`query ProductList`). It never fetches a chunk the page did not load and never calls an endpoint. Paths assembled at runtime from several variables are missed.
+
+A published source map gives the same answer with more context. `sourceMapHints()` returns the page's script URLs and the conventional map location for each (`<script url>.map`) without requesting anything; the authoritative pointer is the `//# sourceMappingURL=` comment on the script's last line. If a `.map` is publicly served, fetch it and search its `sourcesContent` strings for `fetch(`, `axios`, `/api/`, `graphql` to collect endpoint candidates (paths, query parameter names, GraphQL operation names). A 404 is the normal answer in production; do not guess further URLs.
 
 An endpoint found this way is only a candidate. Confirm it exactly like one seen in the network panel: `probe-http.mjs`, then `http` or `intercept`. Read the sources for *where the data comes from*, not for how a request is signed (next section).
 

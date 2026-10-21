@@ -361,6 +361,27 @@ throws('validate cursor not for dom', () => validateRecipe(curRecipe({ strategy:
   ok('diagnose: login path with a login button is a login wall; a thin page that merely says "login" is not', diag('Shop', 'Welcome back Login', '/login').login_wall === true && diag('Item 3', 'Item 3 ₩1,000 Login Cart').login_wall === false);
   ok('diagnose: real 429 pages are still rate_limited', ['429 Too Many Requests', 'Error 429', 'HTTP 429: slow down', '요청이 너무 많습니다. 잠시 후 다시 시도해 주세요.'].every((t) => diag('', t).kind === 'rate_limited') && diag('Error code: 429', 'nginx').kind === 'rate_limited');
 }
+// apiCandidates(): endpoints from the page's own bundles, same site only, no calls to the endpoints themselves
+{
+  const BUNDLE = `const A="/static/img/logo.png";function load(p){return fetch(\`/api/v2/products?page=\${p}&sort=new\`).then(r=>r.json())}
+    axios.get("https://api.shop.test/search/suggest");const R={home:"/",about:"/about-us"};
+    const Q=gql\`query ProductList($after: String) { products(after: $after) { id } }\`;x.post('/graphql',{query:Q});
+    const tracker="https://www.google-analytics.com/g/collect";`;
+  const fetched = [];
+  const g = { URL, console, location: { href: 'https://www.shop.test/list', origin: 'https://www.shop.test', hostname: 'www.shop.test' }, __scrape_no_net: true,
+    document: { readyState: 'loading', cookie: '', querySelectorAll: (sel) => (sel.startsWith('script[src]') ? [{ getAttribute: (k) => (k === 'src' ? '/static/app.9f1.js' : null) }, { getAttribute: (k) => (k === 'src' ? 'https://cdn.other.test/react.js' : null) }] : sel === 'script:not([src])' ? [{ textContent: 'window.cfg = { search: "/api/v1/search" };' }] : []) },
+    performance: { getEntriesByType: () => [{ name: 'https://static.shop.test/chunk-42.js', initiatorType: 'script' }] },
+    fetch: async (u) => { fetched.push(String(u)); return { ok: true, status: 200, text: async () => (String(u).includes('chunk-42') ? 'fetch("/api/v2/cart")' : BUNDLE) }; } };
+  g.window = g;
+  vm.createContext(g);
+  vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+  const ac = JSON.parse(await vm.runInContext('window.__scrape.apiCandidates().then(JSON.stringify)', g));
+  const paths = ac.endpoints.map((e) => e.path);
+  ok('apiCandidates: endpoints from bundles + inline, templates normalised', ['/api/v2/products?page={var}&sort=new', 'https://api.shop.test/search/suggest', '/graphql', '/api/v1/search', '/api/v2/cart'].every((p) => paths.includes(p)), paths);
+  ok('apiCandidates: no assets, routes or trackers', !paths.some((p) => /logo\.png|^\/$|about-us|google-analytics/.test(p)), paths);
+  ok('apiCandidates: fetch() call sites ranked first, GraphQL operations listed', ac.endpoints[0].fetch_call === true && eq(ac.graphql_operations, [{ name: 'ProductList', kind: 'query' }]));
+  ok('apiCandidates: reads only same-site scripts the page loaded', eq(fetched.sort(), ['https://static.shop.test/chunk-42.js', 'https://www.shop.test/static/app.9f1.js']), fetched);
+}
 // session export: cookies for every strategy, localStorage origins for the collector's browser
 {
   const f = path.join(os.tmpdir(), `scrape-selftest-state-${process.pid}.json`);

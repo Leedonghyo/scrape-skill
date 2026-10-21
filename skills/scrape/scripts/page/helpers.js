@@ -718,6 +718,81 @@
     };
   };
 
+  // ---------- API candidates from the page's own code ----------
+  // Most production sites publish no source map, so read the JavaScript the page already loaded and pull out
+  // strings that look like endpoints ("/api/v2/products", "https://api.site.com/search", GraphQL operation
+  // names). Only scripts from this site (same origin, or a sibling host such as static.site.com) that the page
+  // itself loaded are read, from the browser cache where possible, capped by count and size; no chunk the page
+  // did not load is fetched and no endpoint is called. Every result is a candidate to confirm with probe-http.
+  const API_PATH = /\/(?:api|apis|rest|graphql|gql|v\d{1,2}|service|services|ajax|rpc|gateway|backend|search|query|feed|bff)(?:\/|\b)/i;
+  const ASSET_PATH = /\.(?:js|mjs|css|png|jpe?g|gif|svg|ico|woff2?|ttf|map|mp4|webp|html?)(?:[?#]|$)/i;
+  const siteOf = (host) => host.split('.').slice(-2).join('.');
+  S.apiCandidates = async (opts = {}) => {
+    const maxScripts = opts.max_scripts || 20;
+    const maxBytes = opts.max_bytes || 3_000_000;
+    const site = siteOf(location.hostname);
+    const urls = [];
+    const add = (raw) => {
+      let u;
+      try { u = new URL(raw, location.href); } catch (e) { return; }
+      if (!/^https?:$/.test(u.protocol) || siteOf(u.hostname) !== site || NOISE.test(u.href)) return;
+      if (!urls.includes(u.href)) urls.push(u.href);
+    };
+    for (const el of qsa('script[src], link[rel="modulepreload"][href]')) add(el.getAttribute('src') || el.getAttribute('href'));
+    try { for (const r of performance.getEntriesByType('resource')) if (r.initiatorType === 'script' || /\.m?js(\?|$)/.test(r.name)) add(r.name); } catch (e) { /* no resource timing */ }
+    const found = new Map(); // endpoint -> { hits, scripts:Set, fetch_call }
+    const ops = new Map();
+    const scan = (text, label) => {
+      const note = (raw, ctx) => {
+        let ep = raw.replace(/\$\{[^}]*\}/g, '{var}').replace(/\s+/g, '');
+        if (ep.length < 4 || ep.length > 160 || ASSET_PATH.test(ep) || !API_PATH.test(ep)) return;
+        try { const u = new URL(ep, location.href); if (siteOf(u.hostname) !== site && /^https?:/.test(ep)) ep = u.href; } catch (e) { return; }
+        const f = found.get(ep) || { hits: 0, scripts: new Set(), fetch_call: false };
+        f.hits++;
+        f.scripts.add(label);
+        if (/fetch\(|axios|\$\.(ajax|get|post)|\.(get|post|put|request)\(|XMLHttpRequest|\.open\(/.test(ctx)) f.fetch_call = true;
+        found.set(ep, f);
+      };
+      const re = /["'`]((?:https?:\/\/[\w.-]+)?\/[\w\-./{}$:@%~?=&,]*)["'`]/g;
+      let m;
+      while ((m = re.exec(text))) note(m[1], text.slice(Math.max(0, m.index - 60), m.index));
+      const gq = /\b(query|mutation|subscription)\s+([A-Z][A-Za-z0-9_]{2,60})\s*[({]/g;
+      while ((m = gq.exec(text))) ops.set(m[2], m[1]);
+    };
+    const scanned = [];
+    let total = 0;
+    for (const s of qsa('script:not([src])')) { const t = s.textContent || ''; if (!t.includes('window.__scrape')) scan(t, 'inline'); }
+    // htmx / data-attribute driven pages keep the endpoint in the markup, not in a script ("hx-get", "data-url")
+    for (const el of qsa('[hx-get],[hx-post],[data-url],[data-api],[data-endpoint],[data-href],form[action]')) {
+      for (const a of ['hx-get', 'hx-post', 'data-url', 'data-api', 'data-endpoint', 'data-href', 'action']) {
+        const v = el.getAttribute(a);
+        if (v) scan(JSON.stringify(v), 'attribute ' + a);
+      }
+    }
+    for (const u of urls.slice(0, maxScripts)) {
+      if (total >= maxBytes) break;
+      try {
+        const r = await fetch(u, { credentials: 'same-origin', cache: 'force-cache' });
+        if (!r.ok) { scanned.push({ src: cut(u, 160), status: r.status }); continue; }
+        const text = (await r.text()).slice(0, maxBytes - total);
+        total += text.length;
+        scan(text, u.replace(/[?#].*$/, '').split('/').pop() || u);
+        scanned.push({ src: cut(u, 160), bytes: text.length });
+      } catch (e) { scanned.push({ src: cut(u, 160), error: 'not readable (CORS or network)' }); }
+    }
+    const endpoints = [...found.entries()]
+      .map(([path, f]) => ({ path, hits: f.hits, fetch_call: f.fetch_call || undefined, scripts: [...f.scripts].slice(0, 3) }))
+      .sort((a, b) => (b.fetch_call ? 1 : 0) - (a.fetch_call ? 1 : 0) || b.hits - a.hits)
+      .slice(0, opts.limit || 40);
+    return {
+      scanned,
+      skipped_scripts: Math.max(0, urls.length - maxScripts),
+      endpoints,
+      graphql_operations: [...ops.entries()].slice(0, 30).map(([name, kind]) => ({ name, kind })),
+      note: 'Strings found in the site\'s own JavaScript, not observed requests: confirm each with probe-http.mjs (or watch it in the network panel) before using it. Paths built at runtime from several pieces are missed.',
+    };
+  };
+
   S.diagnose = () => {
     const title = norm(document.title);
     const fullText = norm(document.body ? document.body.innerText : '');
@@ -983,6 +1058,7 @@
     embedded: 'embedded() / embeddedGet(source, path) -> JSON the page already ships',
     pagination: 'pagination() -> next links, page params, infinite scroll guess',
     apiHints: 'apiHints() -> XHR/fetch URLs seen so far (also see browser_network_requests)',
+    apiCandidates: 'await apiCandidates() -> endpoint-looking strings and GraphQL operation names from the JavaScript this page already loaded (same site only; candidates for probe-http)',
     sourceMapHints: 'sourceMapHints() -> this page\'s script URLs and the conventional .map URL for each (no network requests)',
     requestOrigins: 'requestOrigins({match, frames}) -> per API call: header names, where each value comes from (storage:<key> / cookie:<name> / computed), and the script frames that sent it. Never returns header values',
     officialSources: 'officialSources() -> links to API docs, developer portals, RSS/sitemaps on this page',

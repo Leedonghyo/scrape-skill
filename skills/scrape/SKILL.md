@@ -46,7 +46,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
    - `overview().api_hints`나 `browser_network_requests(filter: "api|json|graphql")`에 데이터를 담은 JSON 호출이 보이면 → `browser_network_request(index)`로 열어 URL 패턴과 헤더를 적고 `probe-http.mjs <url>`. 브라우저 없이 재현되면(200, `is_json`) → 전략 **`http`**.
    - `overview().embedded`에 `next`, `window:*`, `ldjson`으로 데이터가 있고(`embeddedGet(source, path)`로 확인) `probe-http.mjs <페이지 url>`이 차단되지 않으면 → 전략 **`embedded`**.
    - 데이터 JSON 호출이 보이는데 `probe-http.mjs`가 차단되거나 403일 때(지문 보호 API) → 전략 **`intercept`**. 수집기가 페이지를 Chrome으로 열고, 페이지가 스스로 받은 그 JSON 응답을 읽습니다. `intercept.url_match`에 호출 URL의 정규식을 적고 필드는 `http`처럼 JSON 경로로 씁니다(`references/strategies.md` §2).
-   - `api_hints`가 비어 있으면 `dom`으로 가기 전에 두 가지를 먼저 합니다. (1) `await autoScroll({rounds: 2})` 또는 다음 페이지 링크를 한 번 클릭하고 `browser_network_requests`를 다시 봅니다. 서버 렌더 첫 페이지는 XHR이 없고 2페이지부터 API를 쓰는 사이트가 많습니다. (2) `probe-http.mjs <페이지 url>`의 `embedded.window_assignments`를 읽습니다. `/api/`, `?format=json` 같은 URL을 추측해서 치지는 않습니다.
+   - `api_hints`가 비어 있으면 `dom`으로 가기 전에 두 가지를 먼저 합니다. (1) `await autoScroll({rounds: 2})` 또는 다음 페이지 링크를 한 번 클릭하고 `browser_network_requests`를 다시 봅니다. 서버 렌더 첫 페이지는 XHR이 없고 2페이지부터 API를 쓰는 사이트가 많습니다. (2) `probe-http.mjs <페이지 url>`의 `embedded.window_assignments`를 읽습니다. (3) `await apiCandidates()`로 사이트 자기 코드에 적힌 엔드포인트 후보를 봅니다. 후보는 `probe-http.mjs`로 확인한 뒤에만 씁니다. `/api/`, `?format=json` 같은 URL을 추측해서 치지는 않습니다.
    - 그 외 → **`dom`**. 사용자가 데이터를 볼 수 있으면 항상 됩니다.
 6. 필드를 매핑합니다.
    - `dom`: `overview().lists`에서 시작(가장 큰 반복 블록이 보통 데이터). 사용자가 말한 각 필드에 대해 `findByText("<화면에 보이는 예시값>")`이 정확한 요소와 `list.recipe_hint.container`, `field`를 줍니다. 각 셀렉터를 `probe(selector, { within: container })`로 확인: `count`가 항목 수와 같고 `distinct_texts`가 높아야 진짜 데이터입니다.
@@ -139,6 +139,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 | `embedded()` / `embeddedGet(source, path)` | 페이지가 이미 담고 있는 JSON (`__NEXT_DATA__`, `window.__*`, JSON-LD) |
 | `pagination()` | 다음 링크, 페이지 파라미터, 경로 패턴, 무한 스크롤 추정 |
 | `apiHints()` | 지금까지 보인 XHR/fetch URL |
+| `await apiCandidates()` | 이 페이지가 불러온 같은 사이트 JS·속성에 적힌 엔드포인트 문자열과 GraphQL 작업 이름(후보일 뿐, `probe-http`로 확인). 엔드포인트 자체는 호출하지 않음 |
 | `sourceMapHints()` | 페이지 스크립트 URL과 각 스크립트의 `.map` 추정 URL(요청은 하지 않음). 공개된 소스맵에서 API 엔드포인트 후보를 찾을 때 |
 | `requestOrigins({match, frames})` | API 호출별 헤더 이름, 값의 출처(`storage:<key>` / `cookie:<name>` / `computed`), 보낸 스크립트 위치. 값은 반환하지 않음. 헬퍼 설치 후 새로고침해야 첫 요청부터 보임(`references/strategies.md`) |
 | `diagnose()` | 봇 차단 벤더/종류, 로그인 벽, 유료 벽 신호 |
@@ -166,4 +167,4 @@ node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <k
 
 파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.
 
-필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, 소스맵 단서, 토큰·서명 출처, HAR에서 API 찾기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `references/cli-browser.md`(MCP가 없을 때 Playwright CLI로 하는 법), `examples/`(동작하는 레시피).
+필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, 코드 속 엔드포인트·소스맵 단서, 토큰·서명 출처, HAR에서 API 찾기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `references/cli-browser.md`(MCP가 없을 때 Playwright CLI로 하는 법), `examples/`(동작하는 레시피).
