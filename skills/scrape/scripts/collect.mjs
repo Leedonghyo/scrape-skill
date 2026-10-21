@@ -30,6 +30,7 @@ const NAV_TIMEOUT = 45_000;
 const HUMAN_WAIT_MS = 5 * 60_000;
 const INTERCEPT_TIMEOUT = 10_000; // default intercept.timeout_ms
 const INTERCEPT_SETTLE_MS = 100;  // default intercept.settle_ms: quiet time after the last matching call before moving on
+const INTERCEPT_LISTEN_MS = 10_000; // default intercept.listen_ms: how long a websocket/sse page is listened to
 // Block kinds a person can actually clear by acting in the browser window. Everything else (access_denied,
 // rate_limited, bot_page) is a hard refusal that waiting cannot change.
 const SOLVABLE_BY_HUMAN = new Set(['js_challenge', 'turnstile', 'captcha', 'login_required']);
@@ -252,7 +253,7 @@ class Collector {
     const page = await this.page();
     await this.pause();
     // intercept: growth is measured in captured API responses instead of DOM items; the listener goes on before the navigation.
-    const cap = this.recipe.strategy === 'intercept' ? this.capture(page) : null;
+    const cap = this.recipe.strategy === 'intercept' ? await this.capture(page) : null;
     const hits = [];
     // pages.type cursor: the first load is page 1, every round after it one more; the run ends when a response's cursor does.
     const cursorPath = this.pages.type === 'cursor' ? this.pages.cursor_path : null;
@@ -313,7 +314,7 @@ class Collector {
     const page = await this.page();
     if (pause) await this.pause();
     // intercept: the listener must exist before the navigation or click that makes the page call its API.
-    const cap = this.recipe.strategy === 'intercept' ? this.capture(page) : null;
+    const cap = this.recipe.strategy === 'intercept' ? await this.capture(page) : null;
     try {
       if (target.click) {
         // "next" is a button, not a link: click it and give the page time to swap content or navigate.
@@ -343,9 +344,10 @@ class Collector {
   // a bare HTTP client gets a 403, so we read the response the page already received instead of re-requesting it.
   // Nothing is replayed, signed or forged here. Kept: URL matches intercept.url_match, method matches when given,
   // content-type is JSON, and the same URL + body was not already used in this run.
-  capture(page) {
+  async capture(page) {
     const ic = this.recipe.intercept;
     const re = new RegExp(ic.url_match);
+    if (ic.channel === 'websocket' || ic.channel === 'sse') return this.captureStream(page, re, ic.channel);
     const method = ic.method ? String(ic.method).toUpperCase() : null;
     const cap = { hits: [], matched: 0, pending: new Set(), inflight: new Set(), denied: null };
     const wanted = (req) => re.test(req.url()) && (!method || req.method().toUpperCase() === method);
@@ -378,11 +380,59 @@ class Collector {
     return cap;
   }
 
+  // Live data that never arrives as an HTTP response: WebSocket frames (prices, scores, chat) and Server-Sent
+  // Events (EventSource). Each JSON message is one input to items.path/fields, like one response. Messages are
+  // not deduplicated (two equal ticks are two events); heartbeats map to all-empty rows and are dropped.
+  // Read-only: the page opens and feeds the connection itself, nothing is sent on it.
+  async captureStream(page, re, channel) {
+    const cap = { hits: [], matched: 0, pending: new Set(), inflight: new Set(), denied: null, stream: true };
+    let seq = 0;
+    let active = true;
+    const keep = (url, raw) => {
+      if (!active) return;
+      // Socket.IO / Engine.IO frames carry a numeric packet type before the JSON: 42["tick",{...}]
+      const data = tryParse(String(raw).replace(/^\d+(?=[[{])/, ''));
+      if (data === undefined || data === null || typeof data !== 'object') return;
+      cap.hits.push({ seq: seq++, url, data });
+    };
+    if (channel === 'websocket') {
+      const onSocket = (ws) => {
+        if (!re.test(ws.url())) return;
+        cap.matched++;
+        ws.on('framereceived', (f) => keep(ws.url(), typeof f.payload === 'string' ? f.payload : f.payload.toString('utf8')));
+      };
+      page.on('websocket', onSocket);
+      cap.stop = () => { active = false; page.off('websocket', onSocket); };
+      return cap;
+    }
+    // EventSource messages are only visible to the DevTools protocol (the response body never "finishes").
+    let cdp;
+    try { cdp = await page.context().newCDPSession(page); await cdp.send('Network.enable'); } catch (e) {
+      throw new EnvError(`intercept.channel "sse" needs a Chromium browser with DevTools protocol access (${String(e.message).split('\n')[0]})`);
+    }
+    const streams = new Map(); // requestId -> url
+    cdp.on('Network.requestWillBeSent', (e) => { if (re.test(e.request.url)) { streams.set(e.requestId, e.request.url); cap.matched++; } });
+    cdp.on('Network.eventSourceMessageReceived', (e) => { if (streams.has(e.requestId)) keep(streams.get(e.requestId), e.data); });
+    cap.stop = () => { active = false; cdp.detach().catch(() => {}); };
+    return cap;
+  }
+
   // New responses since the last call, in arrival order. waitFirst: give the page intercept.timeout_ms to make
   // the call at all, then wait until no matching request is in flight and none has arrived for settle_ms
   // (a page may call the API more than once). A fixed 400 ms here used to cost ~0.4 s on every page.
   async settle(cap, page, waitFirst = true) {
     const timeout = this.recipe.intercept.timeout_ms ?? INTERCEPT_TIMEOUT;
+    if (cap.stream) {
+      // A stream has no "last response": listen for listen_ms after the page has loaded, then take what came.
+      if (waitFirst) {
+        const end = Date.now() + (this.recipe.intercept.listen_ms ?? INTERCEPT_LISTEN_MS);
+        while (Date.now() < end && !this.aborted) await sleep(100);
+        if (!cap.matched) this.log(`no ${this.recipe.intercept.channel} connection matched intercept.url_match on ${shorten(page.url(), 80)}`);
+      }
+      const hits = cap.hits.splice(0);
+      this.responses += hits.length;
+      return hits;
+    }
     if (waitFirst) {
       const deadline = Date.now() + timeout;
       const quiet = this.recipe.intercept.settle_ms ?? INTERCEPT_SETTLE_MS;

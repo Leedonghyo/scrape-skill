@@ -113,6 +113,8 @@ export function validateRecipe(r) {
     const m = r.intercept?.url_match;
     if (!m || typeof m !== 'string') fail('"intercept.url_match" (a regex tested against response URLs) is required for strategy intercept');
     try { new RegExp(m); } catch (e) { fail(`"intercept.url_match" is not a valid regex: ${e.message}`); }
+    if (r.intercept.channel != null && !['http', 'websocket', 'sse'].includes(r.intercept.channel)) fail('"intercept.channel" must be http, websocket or sse');
+    if (r.intercept.channel && r.intercept.channel !== 'http' && p.type === 'cursor') fail('pages.type cursor reads responses; it does not work with intercept.channel websocket/sse');
   }
   if (r.detail) {
     if (!r.detail.url_field) fail('"detail.url_field" is required');

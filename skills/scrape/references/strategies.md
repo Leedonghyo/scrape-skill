@@ -42,6 +42,8 @@ The browser shows the JSON call, but `probe-http.mjs` on the same URL returns 40
 3. `pages` is whatever makes the page fire the call again: numbered pages (`param`), a next button (`next_link`), scrolling or "load more" (`scroll`, or `cursor` when the responses carry a cursor, so the run stops exactly at the end instead of after two idle rounds). Check in the browser that page 2 really triggers a new matching request; a server-rendered first page that only calls the API from page 2 on needs `dom` for page 1 or a start URL that is already API-driven.
 4. `--dry-run`, then read `intercepted` in the summary: `0` means nothing matched (`url_match` wrong, the call fires only after interaction, or the response is not `application/json`). Raise `intercept.timeout_ms` for slow SPAs.
 
+Live numbers (tickers, scores, chat) often come over a WebSocket or Server-Sent Events: `browser_network_requests` shows a `101 Switching Protocols` or `text/event-stream` entry and no JSON response. Use the same strategy with `intercept.channel: "websocket"` / `"sse"` and a `listen_ms` that covers the time the user wants (recipe.md, "Intercept").
+
 The preview for the user is still DOM-based (`extract`/`highlight` on the rendered list), as with `http`. If even the browser's own call comes back 403, the collector stops with `blocked`; continue with the block ladder in SKILL.md.
 
 ### Endpoints in the site's own code

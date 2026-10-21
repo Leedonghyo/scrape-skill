@@ -14,6 +14,7 @@
  * sandbox sites have no fingerprint-protected API). Exit 0 only if every test passes.
  */
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import http from 'node:http';
 import os from 'node:os';
@@ -36,7 +37,8 @@ const offline = process.argv.includes('--offline');
 // does not say "Chrome" (a stand-in for fingerprint protection: a bare HTTP client gets 403, the page gets JSON).
 // /api/feed is a cursor API (GET ?cursor=, 400 on an empty cursor), /graphql the same feed as a POST with
 // variables.after, and /feed a page that loads the feed with a "more" button. /app calls /api/private with a
-// bearer token it reads from localStorage (401 without it), like an SPA after login.
+// bearer token it reads from localStorage (401 without it), like an SPA after login. /live gets prices over a
+// WebSocket (Socket.IO-style frames), /stream over Server-Sent Events.
 function fixtureServer(port = 0) {
   const PRODUCTS = Array.from({ length: 15 }, (_, i) => ({ id: i + 1, title: `상품 ${i + 1}`, price: `${(i + 1) * 1000}원` }));
   const send = (res, status, type, body) => { res.writeHead(status, { 'content-type': type }); res.end(body); };
@@ -92,6 +94,21 @@ function fixtureServer(port = 0) {
       if (u.searchParams.has('cursor') && !u.searchParams.get('cursor')) return json(res, 400, { error: 'empty cursor' });
       return json(res, 200, feed(u.searchParams.get('cursor')));
     }
+    if (u.pathname === '/live') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture live</title></head><body><h1>Live prices</h1><ul id="l"></ul><script>
+  const ws = new WebSocket('ws://' + location.host + '/ws/prices');
+  ws.onmessage = (m) => { const li = document.createElement('li'); li.textContent = m.data; document.getElementById('l').appendChild(li); };
+</script></body></html>`);
+    if (u.pathname === '/stream') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture stream</title></head><body><h1>Live scores</h1><ul id="l"></ul><script>
+  const es = new EventSource('/events');
+  es.onmessage = (m) => { const li = document.createElement('li'); li.textContent = m.data; document.getElementById('l').appendChild(li); };
+</script></body></html>`);
+    if (u.pathname === '/events') {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.write(': hello\n\n');
+      [{ team: 'A', score: 1 }, { team: 'B', score: 2 }, { team: 'C', score: 3 }].forEach((m, i) => setTimeout(() => res.write(`data: ${JSON.stringify(m)}\n\n`), 150 * (i + 1)));
+      setTimeout(() => res.end(), 2500);
+      return undefined;
+    }
     if (u.pathname === '/api/links') { // next page given as a (relative) URL, like Django REST / GitHub-style "links.next"
       const n = Number(u.searchParams.get('page') || 1);
       return json(res, 200, { results: POSTS.slice((n - 1) * 5, n * 5), links: { next: n * 5 < POSTS.length ? `/api/links?page=${n + 1}` : null } });
@@ -121,6 +138,18 @@ function fixtureServer(port = 0) {
     }
     if (u.pathname === '/api/refused') return json(res, 403, { error: 'no' });
     return send(res, 404, 'text/plain', 'not found');
+  });
+  // Minimal WebSocket server (RFC 6455 handshake + unmasked text frames), enough for the page above.
+  const wsFrame = (text) => { const b = Buffer.from(text); return Buffer.concat([b.length < 126 ? Buffer.from([0x81, b.length]) : Buffer.from([0x81, 126, b.length >> 8, b.length & 255]), b]); };
+  server.on('upgrade', (req, socket) => {
+    socket.on('error', () => {});
+    if (!req.url.startsWith('/ws/prices')) return socket.destroy();
+    const accept = createHash('sha1').update(req.headers['sec-websocket-key'] + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
+    socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
+    const msgs = ['{"type":"ping"}', '42["tick",{"symbol":"AAA","price":101.5}]', '42["tick",{"symbol":"BBB","price":202}]', '42["tick",{"symbol":"CCC","price":303}]'];
+    msgs.forEach((m, i) => setTimeout(() => socket.writable && socket.write(wsFrame(m)), 150 * (i + 1)));
+    setTimeout(() => socket.destroy(), 3000);
+    return undefined;
   });
   return new Promise((resolve) => server.listen(port, '127.0.0.1', () => resolve({ server, origin: `http://127.0.0.1:${server.address().port}` })));
 }
@@ -191,6 +220,7 @@ for (const f of fs.readdirSync(EXAMPLES).filter((x) => x.endsWith('.json'))) {
 const icRecipe = (over) => ({ version: 1, name: 'x', strategy: 'intercept', pages: { type: 'single', start: 'https://a.test/' }, intercept: { url_match: '/api/' }, fields: {}, ...over });
 ok('validate intercept ok', (() => { try { validateRecipe(icRecipe()); validateRecipe(icRecipe({ pages: { type: 'scroll', start: 'https://a.test/' } })); return true; } catch { return false; } })());
 throws('validate intercept needs url_match', () => validateRecipe(icRecipe({ intercept: {} })));
+throws('validate intercept channel', () => validateRecipe(icRecipe({ intercept: { url_match: '/ws', channel: 'socket' } })));
 throws('validate intercept bad regex', () => validateRecipe(icRecipe({ intercept: { url_match: '(' } })));
 throws('validate next_link still not for http', () => validateRecipe({ version: 1, name: 'x', strategy: 'http', pages: { type: 'next_link', start: 'https://a.test/', next_selector: 'a' }, fields: {} }));
 
@@ -468,6 +498,10 @@ if (!offline) {
     ['local-cursor-graphql', local(GQL), [], 20, (s) => s.rows === 20 && s.stopped_reason === 'cursor_end'],
     // next_url: follow links.next (relative) until it is null
     ['local-next-url', local({ version: 1, name: 'local-next-url', strategy: 'http', pages: { type: 'next_url', start: `${FIXTURE_ORIGIN}/api/links`, next_url_path: 'links.next' }, items: { path: 'results[]' }, fields: { id: 'id', title: 'title' }, rate: { delay_ms: 100, jitter_ms: 50 } }), [], 20, (s) => s.rows === 20 && s.pages_done === 4 && s.stopped_reason === 'no_next_url'],
+    // intercept over a WebSocket: Socket.IO prefix stripped, the ping maps to an empty row and is dropped
+    ['local-intercept-ws', local({ version: 1, name: 'local-intercept-ws', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/live` }, intercept: { url_match: '/ws/prices', channel: 'websocket', listen_ms: 1500 }, items: { path: '[1]' }, fields: { symbol: 'symbol', price: 'price' } }), [], 3, (s) => s.rows === 3 && s.intercepted === 4 && s.sample[0].symbol === 'AAA' && s.sample[0].price === 101.5],
+    // intercept over Server-Sent Events (EventSource)
+    ['local-intercept-sse', local({ version: 1, name: 'local-intercept-sse', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/stream` }, intercept: { url_match: '/events', channel: 'sse', listen_ms: 1500 }, fields: { team: 'team', score: 'score' } }), [], 3, (s) => s.rows === 3 && s.intercepted === 3 && s.sample[2].score === 3],
     // intercept + cursor: the page pages itself through "more"; the cursor only tells us when to stop
     // param pages whose tail lazy-loads: wait.scroll brings each page from 10 to 20 items
     ['local-lazy-scroll', local(LAZY), [], 40, (s) => s.rows === 40 && s.pages_done === 3 && s.stopped_reason === 'empty_page'],

@@ -45,7 +45,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 5. 전략을 고릅니다. 싼 것부터:
    - `overview().api_hints`나 `browser_network_requests(filter: "api|json|graphql")`에 데이터를 담은 JSON 호출이 보이면 → `browser_network_request(index)`로 열어 URL 패턴과 헤더를 적고 `probe-http.mjs <url>`. 브라우저 없이 재현되면(200, `is_json`) → 전략 **`http`**.
    - `overview().embedded`에 `next`, `window:*`, `ldjson`으로 데이터가 있고(`embeddedGet(source, path)`로 확인) `probe-http.mjs <페이지 url>`이 차단되지 않으면 → 전략 **`embedded`**.
-   - 데이터 JSON 호출이 보이는데 `probe-http.mjs`가 차단되거나 403일 때(지문 보호 API) → 전략 **`intercept`**. 수집기가 페이지를 Chrome으로 열고, 페이지가 스스로 받은 그 JSON 응답을 읽습니다. `intercept.url_match`에 호출 URL의 정규식을 적고 필드는 `http`처럼 JSON 경로로 씁니다(`references/strategies.md` §2).
+   - 데이터 JSON 호출이 보이는데 `probe-http.mjs`가 차단되거나 403일 때(지문 보호 API) → 전략 **`intercept`**. 수집기가 페이지를 Chrome으로 열고, 페이지가 스스로 받은 그 JSON 응답을 읽습니다. `intercept.url_match`에 호출 URL의 정규식을 적고 필드는 `http`처럼 JSON 경로로 씁니다(`references/strategies.md` §2). 시세·점수처럼 WebSocket·SSE로 오는 실시간 데이터도 `intercept.channel: "websocket"`/`"sse"`로 같은 방식입니다.
    - `api_hints`가 비어 있으면 `dom`으로 가기 전에 두 가지를 먼저 합니다. (1) `await autoScroll({rounds: 2})` 또는 다음 페이지 링크를 한 번 클릭하고 `browser_network_requests`를 다시 봅니다. 서버 렌더 첫 페이지는 XHR이 없고 2페이지부터 API를 쓰는 사이트가 많습니다. (2) `probe-http.mjs <페이지 url>`의 `embedded.window_assignments`를 읽습니다. (3) `await apiCandidates()`로 사이트 자기 코드에 적힌 엔드포인트 후보를 봅니다. 후보는 `probe-http.mjs`로 확인한 뒤에만 씁니다. `/api/`, `?format=json` 같은 URL을 추측해서 치지는 않습니다.
    - 그 외 → **`dom`**. 사용자가 데이터를 볼 수 있으면 항상 됩니다.
 6. 필드를 매핑합니다.
