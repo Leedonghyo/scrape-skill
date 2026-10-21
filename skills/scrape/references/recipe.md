@@ -81,7 +81,7 @@ For APIs that return "where to continue" instead of accepting a page number (`ne
 ## `items`
 
 - `dom`: `{ "container": "article.product_pod" }`. Each match is one row; field selectors are evaluated inside it.
-- `http` / `embedded` / `intercept`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array; `"$"` is the row itself, for arrays of plain ids). A key that holds dots or brackets goes in quotes inside brackets: `state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[]` (Remix route ids, `"a.b"` keys); `\"` and `\\` escape inside the quotes, and single quotes work too. Each element is one row. With `fields: {}` the row keeps its own top-level keys.
+- `http` / `embedded` / `intercept`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array; `"$"` is the row itself, for arrays of plain ids). `[*]` iterates an object's values, for stores keyed by id (`product.products[*]` over `{ "id1": {…}, "id2": {…} }`). A path that reaches a string holding JSON keeps going inside it, so the Next.js/Redux habit of shipping `pageProps.initialState` as a JSON string needs no extra step: `props.pageProps.initialState.product.products[*]`. A key that holds dots or brackets goes in quotes inside brackets: `state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[]` (Remix route ids, `"a.b"` keys); `\"` and `\\` escape inside the quotes, and single quotes work too. Each element is one row. With `fields: {}` the row keeps its own top-level keys.
 
 ## `fields`
 
@@ -96,7 +96,9 @@ A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` fo
 | `path` | http/embedded/intercept | path inside the row object |
 | `regex` | both | applied to the string value; first capture group wins, else whole match |
 | `map` | both | `{ "One": 1, "Two": 2, … }` — replaces the value after `regex`; unknown values pass through. Star ratings in class names, status words, "Y"/"N" flags |
-| `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim`, `count` |
+| `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim`, `count`, `date` |
+| `tz` | both | with `transform: "date"`: the output zone, default `Asia/Seoul`. `date` turns epoch seconds/milliseconds/microseconds and ISO or RFC text that carries a zone (`Z`, `+09:00`, `GMT`) into `YYYY-MM-DD HH:mm:ss` in that zone. Text with no zone (`2026. 10. 21. 15:10`) is already a wall-clock time and is only tidied, never shifted; text that is not a date comes back unchanged |
+| `lookup` | http/embedded/intercept | `{ "in": "<path to another table in the same document>", "where": "<key in that table>", "equals": "<key in this row>" }` — joins a second table: the element of `in` (array or object values) whose `where` equals this row's `equals` (or, if `where` is an array, contains it); `path` is then read from that element. No match = empty |
 | `template` | both | `"https://n.news.naver.com/article/{언론사ID}/{기사ID}"` — a column built from the row's other columns (list or detail) after extraction; empty when any placeholder is empty. Takes no `selector`/`path` |
 | `absolute` | both | `true` resolves a relative URL (`/kr/buy-sell/…`) against `source` (detail fields: against the detail URL); a string is its own base. `dom` already does this for `href`/`src` |
 
@@ -125,6 +127,22 @@ Whatever a person would fix in the CSV after the run belongs in the recipe, so "
 - `items.require`: rows with an empty value in any listed column are dropped before dedupe and `--limit` (banners and ads mixed into a list; 102 rows → the 101 products).
 - `template` and `absolute` run on every row in the collector, and `template` also in `extract()`/`collectInto()`, so the preview table shows the built column.
 - Order per row: `absolute`, then templates in field order (a template may use an earlier template), then `require`. Detail rows are finished again after the detail columns arrive.
+
+### Joining tables in one document
+
+Store-shaped pages keep related records in separate tables keyed by id. Nike SNKRS (`examples/` has none; this is the live shape):
+
+```json
+"embedded": { "source": "next" },
+"items": { "path": "props.pageProps.initialState.product.products.data.items[*]" },
+"fields": {
+  "상품명": "title",
+  "출시일시": { "path": "commerceStartDate", "transform": "date" },
+  "출시방식": { "lookup": { "in": "props.pageProps.initialState.product.launchViews.data.items", "where": "productId", "equals": "id" }, "path": "method" },
+  "슬러그": { "lookup": { "in": "props.pageProps.initialState.product.threads.data.items", "where": "productIds", "equals": "id" }, "path": "seo.slug" },
+  "링크": { "template": "https://www.nike.com/kr/launch/t/{슬러그}" }
+}
+```
 
 ## `detail`
 

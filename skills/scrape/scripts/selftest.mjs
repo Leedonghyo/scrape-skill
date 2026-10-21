@@ -246,6 +246,49 @@ ok('getPath missing', getPath({ a: 1 }, 'a.z.y') === undefined);
   ok('helpers.js extract fills a template column', eq(got, [{ id: '42', url: 'https://a.test/item/42' }]), got);
 }
 
+// transform date: epoch s/ms/µs and zoned ISO → Asia/Seoul; zone-less text stays as written; non-dates pass through
+{
+  const d = (v, tz) => jsonField({ v }, { path: 'v', transform: 'date', ...(tz ? { tz } : {}) });
+  ok('date: epoch ms → KST', d(1792568031775) === '2026-10-21 16:33:51', d(1792568031775));
+  ok('date: epoch seconds and numeric string', d(1792547248) === '2026-10-21 10:47:28' && d('1792568031775') === '2026-10-21 16:33:51');
+  ok('date: epoch microseconds', d(1792568031775000) === '2026-10-21 16:33:51');
+  ok('date: ISO Z and offset → KST', d('2026-10-22T01:00:00.000Z') === '2026-10-22 10:00:00' && d('2026-10-21T10:00:00-04:00') === '2026-10-21 23:00:00');
+  ok('date: RFC 1123 GMT (RSS) → KST', d('Wed, 21 Oct 2026 06:00:00 GMT') === '2026-10-21 15:00:00');
+  ok('date: tz override', d(1792568031775, 'UTC') === '2026-10-21 07:33:51');
+  ok('date: zone-less text keeps its wall clock', d('2026-10-21 13:52:42') === '2026-10-21 13:52:42' && d('2026-10-21T09:05') === '2026-10-21 09:05:00' && d('2026-10-21') === '2026-10-21');
+  ok('date: not a date passes through', d('어제') === '어제' && d(null) === null);
+  // the same text must give the same answer on a machine in another zone
+  const other = spawnSync(process.execPath, ['-e', `import('./lib.mjs').then((L) => console.log([L.toLocalTime('2026. 10. 21. 15:10'), L.toLocalTime('2026-10-22T01:00:00.000Z')].join('|')))`], { cwd: DIR, env: { ...process.env, TZ: 'America/New_York' }, encoding: 'utf8' });
+  ok('date: independent of the machine time zone', other.stdout.trim() === '2026-10-21 15:10:00|2026-10-22 10:00:00', other.stdout.trim() || other.stderr);
+}
+
+// JSON inside a string, [*] over an object's values, lookup across tables of the same document
+{
+  const state = { product: { products: { a: { id: 'a', title: 'A', price: 100 }, b: { id: 'b', title: 'B', price: 200 } }, launchViews: { x: { productId: 'b', method: 'LINE' } }, threads: [{ productIds: ['a', 'b'], slug: 'pair' }] } };
+  const doc = { props: { pageProps: { initialState: JSON.stringify(state) } } };
+  ok('path steps into a JSON string', getPath(doc, 'props.pageProps.initialState.product.products.a.title') === 'A');
+  ok('path into a non-JSON string is empty', getPath({ s: 'hello' }, 's.x') === undefined);
+  ok('[*] iterates object values', eq(getPath(state, 'product.products[*].id'), ['a', 'b']));
+  const rows = jsonRows(doc, { path: 'props.pageProps.initialState.product.products[*]' }, {
+    title: 'title',
+    method: { lookup: { in: 'props.pageProps.initialState.product.launchViews', where: 'productId', equals: 'id' }, path: 'method' },
+    slug: { lookup: { in: 'props.pageProps.initialState.product.threads', where: 'productIds', equals: 'id' }, path: 'slug' },
+  });
+  ok('lookup: exact match, array contains, and no match', eq(rows, [{ title: 'A', method: null, slug: 'pair' }, { title: 'B', method: 'LINE', slug: 'pair' }]), rows);
+  const base = { version: 1, name: 't', strategy: 'http', pages: { type: 'single', start: 'https://a.test/' }, http: { url_template: 'https://a.test/api' } };
+  throws('validateRecipe: lookup without in/where', () => validateRecipe({ ...base, fields: { m: { lookup: { equals: 'id' }, path: 'm' } } }));
+  throws('validateRecipe: lookup on a dom recipe', () => validateRecipe({ ...base, strategy: 'dom', pages: { type: 'single', start: 'https://a.test/' }, items: { container: 'li' }, fields: { m: { lookup: { in: 'x', where: 'y' } } } }));
+  throws('validateRecipe: unknown tz', () => validateRecipe({ ...base, fields: { t: { path: 't', transform: 'date', tz: 'Mars/Base' } } }));
+  // helpers.js follows the same path and date rules (previews, embeddedGet, collectInto)
+  const g = { URL, console, location: { href: 'https://a.test/', origin: 'https://a.test' }, document: { readyState: 'loading', cookie: '', querySelectorAll: () => [] }, __scrape_no_net: true };
+  g.window = g;
+  vm.createContext(g);
+  vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+  g.doc = doc;
+  const got = JSON.parse(vm.runInContext(`JSON.stringify([window.__scrape.getPath(doc, 'props.pageProps.initialState.product.products[*].title'), window.__scrape.toLocalTime(1792568031775), window.__scrape.toLocalTime('2026-10-22T01:00:00.000Z')])`, g));
+  ok('helpers.js: JSON string, [*] and date match lib.mjs', eq(got, [['A', 'B'], '2026-10-21 16:33:51', '2026-10-22 10:00:00']), got);
+}
+
 // jsonField: regex -> map -> transform order, and passthrough of unknown map keys
 ok('field regex+map', jsonField({ r: 'star-rating Three' }, { path: 'r', regex: 'star-rating (\\w+)', map: { Three: 3 } }) === 3);
 ok('field map unknown passthrough', jsonField({ r: 'Nope' }, { path: 'r', map: { Three: 3 } }) === 'Nope');

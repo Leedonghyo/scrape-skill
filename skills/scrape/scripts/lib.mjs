@@ -134,6 +134,15 @@ export function validateRecipe(r) {
       for (const [, k] of f.template.matchAll(/\{([^{}]+)\}/g)) if (!known.has(k)) fail(`"${where}.${n}.template" uses {${k}}, which is not a column of this recipe`);
     }
   }
+  for (const [where, fields] of [['fields', r.fields], ['detail.fields', r.detail?.fields]]) {
+    for (const [n, f] of Object.entries(fields || {})) {
+      if (!f || typeof f !== 'object') continue;
+      if (f.tz != null) { try { new Intl.DateTimeFormat('en', { timeZone: f.tz }); } catch { fail(`"${where}.${n}.tz" is not a time zone (e.g. "Asia/Seoul", "UTC")`); } }
+      const L = f.lookup;
+      if (L != null && !(L && typeof L.in === 'string' && typeof L.where === 'string' && (L.equals == null || typeof L.equals === 'string'))) fail(`"${where}.${n}.lookup" must be { "in": "<path to the other table>", "where": "<key in that table>", "equals": "<key in this row>" }`);
+      if (L != null && !['http', 'embedded', 'intercept'].includes(where === 'fields' ? r.strategy : r.detail?.strategy === 'dom' ? 'dom' : r.detail?.strategy ?? 'dom')) fail(`"${where}.${n}.lookup" only works on JSON (strategy http, embedded or intercept)`);
+    }
+  }
   const req = r.items?.require;
   if (req != null && !(Array.isArray(req) && req.every((k) => typeof k === 'string' && k in r.fields))) fail('"items.require" must be a list of column names from "fields"');
   if (r.detail?.strategy != null && !['dom', 'embedded', 'http'].includes(r.detail.strategy)) fail('"detail.strategy" must be dom, embedded or http');
@@ -240,15 +249,19 @@ export function noiseRegex() {
 // "[]" on a single object treats it as a one-item list: APIs (and schema-less protobuf, where a repeated field
 // seen once is not an array) often send one item without the array around it.
 // ["routes/kr.search._index"] (or ['…']) addresses a key that holds dots or brackets; \" and \\ escape inside.
+// "[*]" iterates an object's values (or an array): stores keyed by id, { "id1": {…}, "id2": {…} }.
+// A path that meets a string holding JSON keeps going inside it: Next.js/Redux pages often ship
+// pageProps.initialState as a JSON string, so "props.pageProps.initialState.product" just works.
 const ITER = Symbol('[]');
+const VALUES = Symbol('[*]');
 export function pathSegments(p) {
   const segs = [];
-  const re = /\[\s*(["'])((?:\\.|(?!\1)[^\\])*)\1\s*\]|\[(\d+)\]|\[\]|([^.[\]]+)/g;
+  const re = /\[\s*(["'])((?:\\.|(?!\1)[^\\])*)\1\s*\]|\[(\d+)\]|\[\*\]|\[\]|([^.[\]]+)/g;
   for (const m of p.matchAll(re)) {
     if (m[1]) segs.push(m[2].replace(/\\(.)/g, '$1'));
     else if (m[3] !== undefined) segs.push(m[3]);
     else if (m[4] !== undefined) segs.push(m[4]);
-    else segs.push(ITER);
+    else segs.push(m[0] === '[*]' ? VALUES : ITER);
   }
   return segs;
 }
@@ -256,25 +269,83 @@ export function getPath(obj, p) {
   if (!p || p === '$') return obj;
   return walkPath(obj, pathSegments(p));
 }
+// One-entry cache: lookups re-read the same big initialState string for every row.
+let lastJsonText, lastJsonValue;
+function parseJsonString(str) {
+  if (str === lastJsonText) return lastJsonValue;
+  const t = str.trimStart();
+  if (t[0] !== '{' && t[0] !== '[') return undefined;
+  try { lastJsonValue = JSON.parse(str); lastJsonText = str; return lastJsonValue; } catch { return undefined; }
+}
 function walkPath(obj, segs) {
   let cur = obj;
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
     if (cur == null) return undefined;
-    if (s === ITER) {
+    if (typeof cur === 'string') { cur = parseJsonString(cur); if (cur === undefined) return undefined; }
+    if (s === ITER || s === VALUES) {
       const rest = segs.slice(i + 1);
-      return Array.isArray(cur) ? cur.map((x) => walkPath(x, rest)) : typeof cur === 'object' ? [walkPath(cur, rest)] : undefined;
+      if (Array.isArray(cur)) return cur.map((x) => walkPath(x, rest));
+      if (typeof cur !== 'object') return undefined;
+      return s === VALUES ? Object.values(cur).map((x) => walkPath(x, rest)) : [walkPath(cur, rest)];
     }
     cur = cur[s];
   }
   return cur;
 }
 
+// transform: "date" — epoch numbers (seconds, milliseconds or microseconds) and ISO text with a zone become
+// "YYYY-MM-DD HH:mm:ss" in tz (default Asia/Seoul). Text without a zone is taken as already local and only
+// tidied; text that is not a date at all comes back unchanged rather than lost.
+export function toLocalTime(v, tz = 'Asia/Seoul') {
+  if (v == null || v === '') return null;
+  const str = String(v).trim();
+  let d;
+  if (typeof v === 'number' || /^\d{9,}(\.\d+)?$/.test(str)) {
+    let n = Number(v);
+    if (n < 1e11) n *= 1000; else if (n > 1e14) n /= 1000;
+    d = new Date(n);
+  } else {
+    const local = str.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(:\d{2})?(?:\.\d+)?)?$/);
+    if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
+    d = new Date(str);
+    if (Number.isNaN(d.getTime())) return v;
+    // No zone in the text: it is a wall-clock time already, so keep its fields instead of shifting it.
+    if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) {
+      const z = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+    }
+  }
+  if (Number.isNaN(d.getTime())) return v;
+  const part = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map((x) => [x.type, x.value]));
+  return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}:${part.second}`;
+}
+
+// lookup: { in, where, equals } joins another table of the same document: take the collection at `in`
+// (array, or an object's values), find the element whose `where` equals this row's `equals` (or, when
+// `where` is an array, contains it), then read `path` from that element. No match = empty.
+function lookupBase(row, L, doc) {
+  const key = getPath(row, L.equals ?? '$');
+  if (isEmpty(key)) return undefined;
+  let coll = getPath(doc, L.in);
+  coll = Array.isArray(coll) ? coll : coll && typeof coll === 'object' ? Object.values(coll) : [];
+  return coll.find((c) => {
+    const v = getPath(c, L.where);
+    return Array.isArray(v) ? v.some((x) => String(x) === String(key)) : v != null && String(v) === String(key);
+  });
+}
+
 // One column from one JSON row. Mirrors value() in helpers.js: regex (group 1 wins), then transform.
-export function jsonField(row, raw) {
+// doc is the whole response, for lookup.
+export function jsonField(row, raw, doc) {
   const spec = typeof raw === 'string' ? { path: raw } : raw || {};
   if (spec.template != null) return null; // filled from the other columns by finishRows
-  let v = getPath(row, spec.path ?? spec.selector ?? '');
+  let base = row;
+  if (spec.lookup) {
+    base = lookupBase(row, spec.lookup, doc ?? row);
+    if (base === undefined) return spec.transform === 'count' ? 0 : null;
+  }
+  let v = getPath(base, spec.path ?? spec.selector ?? '');
   if (v === undefined) v = null;
   // transform: "count" — how many, not which: array length (a missing value counts 0, a single value 1)
   if (spec.transform === 'count') return Array.isArray(v) ? v.length : v == null ? 0 : 1;
@@ -289,6 +360,7 @@ export function jsonField(row, raw) {
     v = Number.isNaN(n) ? null : n;
   }
   if (v != null && spec.transform === 'trim') v = String(v).replace(/\s+/g, ' ').trim();
+  if (v != null && spec.transform === 'date') v = toLocalTime(v, spec.tz);
   return v;
 }
 
@@ -298,12 +370,12 @@ export function jsonRows(data, items, fields) {
   const p = items?.path;
   let rows = p ? getPath(data, p) : data;
   if (rows == null) return [];
-  const iterations = p ? pathSegments(p).filter((x) => x === ITER).length : 0;
+  const iterations = p ? pathSegments(p).filter((x) => x === ITER || x === VALUES).length : 0;
   rows = Array.isArray(rows) ? (iterations > 1 ? rows.flat(iterations - 1) : rows) : [rows];
   const names = Object.keys(fields || {});
   return rows
     .filter((r) => r != null)
-    .map((r) => (names.length ? Object.fromEntries(names.map((n) => [n, jsonField(r, fields[n])])) : r && typeof r === 'object' && !Array.isArray(r) ? r : { value: r }))
+    .map((r) => (names.length ? Object.fromEntries(names.map((n) => [n, jsonField(r, fields[n], data)])) : r && typeof r === 'object' && !Array.isArray(r) ? r : { value: r }))
     .filter(hasAnyValue);
 }
 

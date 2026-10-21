@@ -55,6 +55,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
    - `http`/`embedded`/`intercept`: JSON에서 배열(`items.path`)과 행별 경로를 찾습니다. API가 페이지 번호 대신 커서(`next_cursor`, `after`, `endCursor`)로 넘어가면 `pages.type: cursor`, 다음 페이지 주소를 통째로 주면(`links.next`, `next_page_url`) `pages.type: next_url`을 씁니다(`references/recipe.md`). `embeddedGet`과 네트워크 응답 본문이 그걸 보는 창입니다.
    - 항목 URL이 있으면 열로 넣으세요. 자연스러운 `dedupe_key`이고 사용자도 링크를 좋아합니다. URL이 통째로 없고 id만 있으면 `{ "template": "https://site/article/{언론사ID}/{기사ID}" }`로 다른 열에서 조립하고, 상대 주소(`/kr/buy-sell/…`)면 JSON 필드에 `absolute: true`를 붙입니다.
    - 데이터가 아닌 행(광고·배너·구분선)이 섞이면 그 행에만 비는 열을 `items.require: ["순위"]`에 넣어 거릅니다.
+   - 시각은 `transform: "date"`로 한국 시각 `YYYY-MM-DD HH:mm:ss`가 됩니다(밀리초·초 숫자, `Z`·`+09:00`이 붙은 ISO). JSON이 문자열로 한 번 더 감싸여 있어도(`pageProps.initialState`) 경로가 그대로 들어가고, id로 묶인 표는 `[*]`로 돌며, 다른 표의 값은 `lookup`으로 붙입니다(`references/recipe.md`).
    - **수집이 끝난 CSV를 손으로 고치지 마세요.** 링크 조립, 전체 주소화, 배너 빼기를 수집 후 스크립트로 하면 '레시피 다시 돌려줘' 때 사라집니다. 위 셋으로 레시피에 넣습니다(`references/recipe.md`의 "Finishing rows"). 레시피로 표현이 안 되는 정리가 남으면 보고에 그 사실을 적습니다.
    안정적인 셀렉터(`id`, `data-testid`, 의미 있는 class)를 위치 기반보다 우선하세요. 헬퍼는 이미 해시 class를 피합니다.
 7. 사용자에게 말하기 **전에** 두 번째 페이지(2페이지 또는 다른 항목의 상세 페이지)를 같은 매핑으로 확인하세요. 그래야 확인 메시지에 "1·2페이지에서 검증했다"고 적을 수 있습니다. 가장 흔한 실패는 첫 페이지에서만 맞는 매핑입니다.

@@ -156,6 +156,28 @@
   const itemSelector = (info) => listSelector(info.listEl, [...info.listEl.children].filter((c) => signature(c) === signature(info.itemEl)));
 
   // ---------- extraction (shared with scripts/collect.mjs) ----------
+  // transform: "date" — same rule as toLocalTime in lib.mjs: epoch numbers and zoned ISO text → tz (default
+  // Asia/Seoul) "YYYY-MM-DD HH:mm:ss"; zone-less text keeps its wall-clock fields; non-dates come back unchanged.
+  const toLocalTime = (v, tz = 'Asia/Seoul') => {
+    if (v == null || v === '') return null;
+    const str = String(v).trim();
+    const z = (n) => String(n).padStart(2, '0');
+    let d;
+    if (typeof v === 'number' || /^\d{9,}(\.\d+)?$/.test(str)) {
+      let n = Number(v);
+      if (n < 1e11) n *= 1000; else if (n > 1e14) n /= 1000;
+      d = new Date(n);
+    } else {
+      const local = str.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(:\d{2})?(?:\.\d+)?)?$/);
+      if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
+      d = new Date(str);
+      if (Number.isNaN(d.getTime())) return v;
+      if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+    }
+    if (Number.isNaN(d.getTime())) return v;
+    const part = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map((x) => [x.type, x.value]));
+    return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}:${part.second}`;
+  };
   const value = (e, spec) => {
     let v;
     if (!spec.attr || spec.attr === 'text') v = norm(e.textContent);
@@ -181,6 +203,7 @@
       v = Number.isNaN(n) ? null : n;
     }
     if (v != null && spec.transform === 'trim') v = norm(v);
+    if (v != null && spec.transform === 'date') v = toLocalTime(v, spec.tz);
     return v;
   };
   // Resolve a field selector inside a scope. ":scope" = the container itself.
@@ -200,7 +223,7 @@
     return qsa(s, sc === document ? document : sc);
   };
   S.resolve = resolve;
-  // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count', absolute } | { template } }
+  // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count'|'date', tz, absolute } | { template } }
   // container: css for each item (one row per match). Omit for a single-row page.
   S.extract = (fields, container) => {
     const scopes = container ? qsa(container) : [document];
@@ -410,26 +433,38 @@
   };
   // path grammar: a.b[0].c   and a trailing/inner [] to iterate (used by collect.mjs for items.path)
   // ["key.with.dots"] (or ['…']) addresses a key that holds dots or brackets; \" and \\ escape inside. Same as lib.mjs.
+  // "[*]" iterates an object's values; a path that meets a string holding JSON keeps going inside it.
   const ITER = Symbol('[]');
+  const VALUES = Symbol('[*]');
   const pathSegments = (path) => {
     const segs = [];
-    const re = /\[\s*(["'])((?:\\.|(?!\1)[^\\])*)\1\s*\]|\[(\d+)\]|\[\]|([^.[\]]+)/g;
+    const re = /\[\s*(["'])((?:\\.|(?!\1)[^\\])*)\1\s*\]|\[(\d+)\]|\[\*\]|\[\]|([^.[\]]+)/g;
     for (const m of path.matchAll(re)) {
       if (m[1]) segs.push(m[2].replace(/\\(.)/g, '$1'));
       else if (m[3] !== undefined) segs.push(m[3]);
       else if (m[4] !== undefined) segs.push(m[4]);
-      else segs.push(ITER);
+      else segs.push(m[0] === '[*]' ? VALUES : ITER);
     }
     return segs;
+  };
+  let lastJsonText, lastJsonValue;
+  const parseJsonString = (str) => {
+    if (str === lastJsonText) return lastJsonValue;
+    const t = str.trimStart();
+    if (t[0] !== '{' && t[0] !== '[') return undefined;
+    try { lastJsonValue = JSON.parse(str); lastJsonText = str; return lastJsonValue; } catch (e) { return undefined; }
   };
   const walkPath = (obj, segs) => {
     let cur = obj;
     for (let i = 0; i < segs.length; i++) {
       const s = segs[i];
       if (cur == null) return undefined;
-      if (s === ITER) {
+      if (typeof cur === 'string') { cur = parseJsonString(cur); if (cur === undefined) return undefined; }
+      if (s === ITER || s === VALUES) {
         const rest = segs.slice(i + 1);
-        return Array.isArray(cur) ? cur.map((x) => walkPath(x, rest)) : typeof cur === 'object' ? [walkPath(cur, rest)] : undefined; // one object = a one-item list
+        if (Array.isArray(cur)) return cur.map((x) => walkPath(x, rest));
+        if (typeof cur !== 'object') return undefined;
+        return s === VALUES ? Object.values(cur).map((x) => walkPath(x, rest)) : [walkPath(cur, rest)]; // one object = a one-item list
       }
       cur = cur[s];
     }
@@ -513,6 +548,7 @@
     return { path: path || '$', shape: shape(v, opts.depth || 2), json: json == null ? null : cut(json, opts.max || 3000), length: json ? json.length : 0 };
   };
   S.getPath = getPath;
+  S.toLocalTime = toLocalTime;
 
   // ---------- pagination / API hints / diagnosis ----------
   S.pagination = () => {
