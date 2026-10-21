@@ -397,21 +397,33 @@
     return typeof v + ' ' + String(v);
   };
   // path grammar: a.b[0].c   and a trailing/inner [] to iterate (used by collect.mjs for items.path)
-  const getPath = (obj, path) => {
-    if (!path || path === '$') return obj;
-    const segs = path.replace(/\[(\d+)\]/g, '.$1').replace(/\[\]/g, '.[]').split('.').filter(Boolean);
+  // ["key.with.dots"] (or ['…']) addresses a key that holds dots or brackets; \" and \\ escape inside. Same as lib.mjs.
+  const ITER = Symbol('[]');
+  const pathSegments = (path) => {
+    const segs = [];
+    const re = /\[\s*(["'])((?:\\.|(?!\1)[^\\])*)\1\s*\]|\[(\d+)\]|\[\]|([^.[\]]+)/g;
+    for (const m of path.matchAll(re)) {
+      if (m[1]) segs.push(m[2].replace(/\\(.)/g, '$1'));
+      else if (m[3] !== undefined) segs.push(m[3]);
+      else if (m[4] !== undefined) segs.push(m[4]);
+      else segs.push(ITER);
+    }
+    return segs;
+  };
+  const walkPath = (obj, segs) => {
     let cur = obj;
     for (let i = 0; i < segs.length; i++) {
       const s = segs[i];
       if (cur == null) return undefined;
-      if (s === '[]') {
-        const rest = segs.slice(i + 1).join('.');
-        return Array.isArray(cur) ? cur.map((x) => getPath(x, rest)) : typeof cur === 'object' ? [getPath(cur, rest)] : undefined; // one object = a one-item list
+      if (s === ITER) {
+        const rest = segs.slice(i + 1);
+        return Array.isArray(cur) ? cur.map((x) => walkPath(x, rest)) : typeof cur === 'object' ? [walkPath(cur, rest)] : undefined; // one object = a one-item list
       }
       cur = cur[s];
     }
     return cur;
   };
+  const getPath = (obj, path) => (!path || path === '$' ? obj : walkPath(obj, pathSegments(path)));
   const WINDOW_STATE_KEYS = ['__NEXT_DATA__', '__NUXT__', '__INITIAL_STATE__', '__PRELOADED_STATE__', '__APOLLO_STATE__', '__remixContext', '__INITIAL_DATA__', '__DATA__', '__STATE__', '__PRELOADED__', '__reactRouterContext', '__staticRouterHydrationData', 'dataLayer'];
   const embeddedSources = () => {
     const src = {};

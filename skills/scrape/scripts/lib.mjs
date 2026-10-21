@@ -228,16 +228,31 @@ export function noiseRegex() {
 // ---------- JSON paths and fields (grammar identical to page/helpers.js getPath) ----------
 // "[]" on a single object treats it as a one-item list: APIs (and schema-less protobuf, where a repeated field
 // seen once is not an array) often send one item without the array around it.
+// ["routes/kr.search._index"] (or ['…']) addresses a key that holds dots or brackets; \" and \\ escape inside.
+const ITER = Symbol('[]');
+export function pathSegments(p) {
+  const segs = [];
+  const re = /\[\s*(["'])((?:\\.|(?!\1)[^\\])*)\1\s*\]|\[(\d+)\]|\[\]|([^.[\]]+)/g;
+  for (const m of p.matchAll(re)) {
+    if (m[1]) segs.push(m[2].replace(/\\(.)/g, '$1'));
+    else if (m[3] !== undefined) segs.push(m[3]);
+    else if (m[4] !== undefined) segs.push(m[4]);
+    else segs.push(ITER);
+  }
+  return segs;
+}
 export function getPath(obj, p) {
   if (!p || p === '$') return obj;
-  const segs = p.replace(/\[(\d+)\]/g, '.$1').replace(/\[\]/g, '.[]').split('.').filter(Boolean);
+  return walkPath(obj, pathSegments(p));
+}
+function walkPath(obj, segs) {
   let cur = obj;
   for (let i = 0; i < segs.length; i++) {
     const s = segs[i];
     if (cur == null) return undefined;
-    if (s === '[]') {
-      const rest = segs.slice(i + 1).join('.');
-      return Array.isArray(cur) ? cur.map((x) => getPath(x, rest)) : typeof cur === 'object' ? [getPath(cur, rest)] : undefined;
+    if (s === ITER) {
+      const rest = segs.slice(i + 1);
+      return Array.isArray(cur) ? cur.map((x) => walkPath(x, rest)) : typeof cur === 'object' ? [walkPath(cur, rest)] : undefined;
     }
     cur = cur[s];
   }

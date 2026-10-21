@@ -26,6 +26,7 @@ import {
   getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
   csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, nextUrl, noiseRegex, decodeProtobuf, decodeBinaryFrame, messageMatches, UsageError,
 } from './lib.mjs';
+import { objectArrays } from './har-scan.mjs';
 
 const DIR = fileURLToPath(new URL('.', import.meta.url));
 const EXAMPLES = path.join(DIR, '..', 'examples');
@@ -190,6 +191,24 @@ ok('getPath nested', getPath({ a: { b: [{ c: 7 }] } }, 'a.b[0].c') === 7);
 ok('getPath array iterate', eq(getPath({ q: [{ t: 1 }, { t: 2 }] }, 'q[].t'), [1, 2]));
 ok('getPath root array', eq(getPath([{ t: 'x' }], '[].t'), ['x']));
 ok('getPath missing', getPath({ a: 1 }, 'a.z.y') === undefined);
+{
+  // Remix loaderData: route ids hold dots and slashes
+  const remix = { state: { loaderData: { 'routes/kr.search.buy-sell._index': { buySellArticles: [{ title: 'a' }, { title: 'b' }] } } } };
+  ok('getPath ["dotted.key"]', eq(getPath(remix, 'state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[].title'), ['a', 'b']));
+  ok("getPath ['single quotes'] and a quoted key first", getPath({ 'a.b': { c: 1 } }, "['a.b'].c") === 1);
+  ok('getPath quoted key with brackets, escaped quote and backslash', getPath({ 'x[0]"y\\z': 5 }, '["x[0]\\"y\\\\z"]') === 5);
+  ok('getPath quoted "[]" is a key, not iterate', getPath({ '[]': 9 }, '["[]"]') === 9);
+  ok('getPath quoted key then index', getPath({ 'k.v': [10, 20] }, '["k.v"][1]') === 20);
+  const g = { URL, console, location: { href: 'https://a.test/', origin: 'https://a.test' }, document: { readyState: 'loading', cookie: '', querySelectorAll: () => [] }, __scrape_no_net: true };
+  g.window = g;
+  vm.createContext(g);
+  vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+  g.remix = remix;
+  const got = JSON.parse(vm.runInContext('JSON.stringify(window.__scrape.getPath(remix, \'state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[].title\'))', g));
+  ok('helpers.js getPath matches lib.mjs on ["dotted.key"]', eq(got, ['a', 'b']), got);
+  const arrs = objectArrays(remix);
+  ok('har-scan objectArrays emits a bracketed path that getPath can follow', arrs.includes('state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[]') && eq(getPath(remix, arrs.find((a) => a.endsWith('buySellArticles[]'))), remix.state.loaderData['routes/kr.search.buy-sell._index'].buySellArticles), arrs);
+}
 
 // jsonField: regex -> map -> transform order, and passthrough of unknown map keys
 ok('field regex+map', jsonField({ r: 'star-rating Three' }, { path: 'r', regex: 'star-rating (\\w+)', map: { Three: 3 } }) === 3);

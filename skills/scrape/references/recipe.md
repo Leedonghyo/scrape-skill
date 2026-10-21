@@ -81,7 +81,7 @@ For APIs that return "where to continue" instead of accepting a page number (`ne
 ## `items`
 
 - `dom`: `{ "container": "article.product_pod" }`. Each match is one row; field selectors are evaluated inside it.
-- `http` / `embedded` / `intercept`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array). Each element is one row. With `fields: {}` the row keeps its own top-level keys.
+- `http` / `embedded` / `intercept`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array). A key that holds dots or brackets goes in quotes inside brackets: `state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[]` (Remix route ids, `"a.b"` keys); `\"` and `\\` escape inside the quotes, and single quotes work too. Each element is one row. With `fields: {}` the row keeps its own top-level keys.
 
 ## `fields`
 

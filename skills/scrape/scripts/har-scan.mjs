@@ -33,7 +33,9 @@ const ANTIBOT_COOKIE = /^(_abck|bm_sz|ak_bmsc|cf_clearance|__cf_bm|datadome|_px\
 
 const looksSecret = (v) => /^eyJ[\w-]+\./.test(v) || (v.length >= 20 && !/\s/.test(v) && /[A-Za-z]/.test(v) && /\d/.test(v));
 const idSegment = (s) => /^\d+$/.test(s) || /^(?=.*\d)[0-9a-f]{8,}$/i.test(s) || /^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(s) || looksSecret(s);
-const simpleKey = (k) => /^[\w$-]+$/.test(k); // keys the getPath grammar can address
+const simpleKey = (k) => /^[\w$-]+$/.test(k); // keys the getPath grammar can address bare
+// Any other key goes in brackets: routes["kr.search._index"].items[]
+const keyPath = (p, k) => (simpleKey(k) ? (p ? `${p}.${k}` : k) : `${p}["${k.replace(/[\\"]/g, '\\$&')}"]`);
 const isObj = (v) => v != null && typeof v === 'object' && !Array.isArray(v);
 
 // "39,000원" should find 39000 in the JSON, the same way findByText does on the page.
@@ -71,7 +73,7 @@ export function objectArrays(json) {
       if (isObj(v[0])) walk(v[0], here, depth + 1); // lists inside list items: "groups[].items[]"
       return;
     }
-    for (const [k, x] of Object.entries(v).slice(0, 200)) if (x && typeof x === 'object' && simpleKey(k)) walk(x, p ? `${p}.${k}` : k, depth + 1);
+    for (const [k, x] of Object.entries(v).slice(0, 200)) if (x && typeof x === 'object') walk(x, keyPath(p, k), depth + 1);
   };
   walk(json, '', 0);
   return out;
@@ -86,8 +88,7 @@ function findKey(json, tests, maxDepth = 5) {
       for (const [v, p] of level) {
         if (!isObj(v)) continue;
         for (const [k, x] of Object.entries(v).slice(0, 200)) {
-          if (!simpleKey(k)) continue;
-          const kp = p ? `${p}.${k}` : k;
+          const kp = keyPath(p, k);
           if (re.test(k) && (x === null || typeof x !== 'object')) return { path: kp, value: x };
           if (isObj(x)) next.push([x, kp]);
         }
