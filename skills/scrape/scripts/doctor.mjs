@@ -94,11 +94,21 @@ try {
 } catch { /* reported below */ }
 line(downloadsOk, `${downloads} writable`, downloadsOk ? null : 'default output goes here; use --out to write elsewhere', false);
 
+// 6. Playwright CLI: optional browser for the analysis steps when Playwright MCP is not installed
+// (references/cli-browser.md). MCP itself cannot be detected from here; the model sees whether its tools exist.
+const cliPath = onPath(['playwright-cli']);
+let cliVersion = null;
+if (cliPath) {
+  const r = spawnSync(cliPath, ['--version'], { encoding: 'utf8', timeout: 15000, shell: process.platform === 'win32' });
+  cliVersion = (r.stdout || '').trim().split(/\r?\n/).pop() || null;
+}
+line(!!cliPath, 'playwright-cli (optional)', cliPath ? `${cliVersion || 'version unknown'} at ${cliPath}` : 'not installed; only needed when Playwright MCP is unavailable and the user chose the CLI', false);
+
 const ok = problems.length === 0;
 console.log(ok ? 'All required checks passed.' : `Problems: ${problems.join('; ')}`);
 console.log(JSON.stringify({
   ok, node: process.versions.node, platform: process.platform, scripts_dir: SCRIPTS_DIR, node_modules: modulesOk, playwright_core: pwVersion,
   browser: { chrome: chrome || null, edge: edge || null, bundled_chromium: bundled || null },
-  scrape_home: dirsOk ? SCRAPE_HOME : null, downloads: downloadsOk ? downloads : null, problems, fixes,
+  scrape_home: dirsOk ? SCRAPE_HOME : null, downloads: downloadsOk ? downloads : null, playwright_cli: cliPath ? { path: cliPath, version: cliVersion } : null, problems, fixes,
 }));
 process.exit(ok ? 0 : 1);

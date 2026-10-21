@@ -13,7 +13,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 ## 쓰는 도구
 
-- **Playwright MCP** (`browser_navigate`, `browser_evaluate`, `browser_run_code_unsafe`, `browser_network_requests`, `browser_take_screenshot`, `browser_click`, `browser_close`…). 사용자가 직접 보고 조작할 수 있는 실제 Chrome 창입니다. 이 창은 작업이 끝나도 저절로 닫히지 않으니, 열었으면 마지막에 `browser_close`로 닫으세요(4단계 6번). 이 도구들이 없으면 멈추고 추가 방법을 알려주세요: `claude plugin install playwright` 또는 `claude mcp add --scope user playwright -- npx @playwright/mcp@latest`, 그다음 Claude Code 재시작.
+- **Playwright MCP** (`browser_navigate`, `browser_evaluate`, `browser_run_code_unsafe`, `browser_network_requests`, `browser_take_screenshot`, `browser_click`, `browser_close`…). 사용자가 직접 보고 조작할 수 있는 실제 Chrome 창입니다. 이 창은 작업이 끝나도 저절로 닫히지 않으니, 열었으면 마지막에 `browser_close`로 닫으세요(4단계 6번). 이 도구들이 없으면 사용자에게 두 가지를 제시하고 고르게 하세요(문구는 `references/messages.md`): (1) MCP 추가(`claude plugin install playwright` 또는 `claude mcp add --scope user playwright -- npx @playwright/mcp@latest`) 후 Claude Code 재시작, (2) 재시작 없이 Playwright CLI(`npm install -g @playwright/cli@latest`)로 진행. 추천은 (2)입니다. CLI를 고르면 아래의 모든 `browser_*` 호출을 `references/cli-browser.md`의 대응표대로 셸 명령으로 바꿉니다. 헬퍼·레시피·수집기는 그대로입니다. 설치는 사용자가 고른 뒤에만 합니다.
 - **페이지 주입 헬퍼** `<skill-dir>/scripts/page/helpers.js`. `window.__scrape`로 노출됩니다. 탭당 한 번 설치:
   ```
   browser_run_code_unsafe  code:
@@ -166,4 +166,4 @@ node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <k
 
 파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.
 
-필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, 소스맵 단서, 토큰·서명 출처, HAR에서 API 찾기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `examples/`(동작하는 레시피).
+필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, 소스맵 단서, 토큰·서명 출처, HAR에서 API 찾기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `references/cli-browser.md`(MCP가 없을 때 Playwright CLI로 하는 법), `examples/`(동작하는 레시피).

@@ -27,6 +27,10 @@ Small job, no question:
 
 ## Situations
 
+### No browser tool yet (Playwright MCP missing)
+- ko: "사이트를 열어 볼 브라우저 도구가 아직 없어요. 두 가지 방법이 있어요. (1) Playwright MCP를 추가하고 Claude Code를 다시 시작하기 — 명령 한 줄이지만 재시작이 필요해요. (2) Playwright CLI를 설치하고 바로 계속하기 — 이 컴퓨터에 Microsoft의 `@playwright/cli` 프로그램이 하나 설치되고, 재시작은 필요 없어요. 어느 쪽으로 할까요? 저는 지금 바로 이어갈 수 있는 (2)를 권해요."
+- en: "There's no browser tool for me to open the site yet. Two ways: (1) add Playwright MCP and restart Claude Code — one command, but it needs a restart. (2) install Playwright CLI and continue right away — this installs Microsoft's `@playwright/cli` program on your computer, no restart. Which do you prefer? I'd go with (2) so we can keep going now."
+
 ### Official API or data page exists
 - ko: "이 사이트는 공식 API가 있어요. 문서 기준으로 월 1,000건까지 무료, 그 이상은 유료입니다 (링크). API를 쓰면 더 정확하고 차단 걱정이 없고, 사이트에서 바로 수집하면 가입 없이 지금 받을 수 있어요. 어느 쪽으로 할까요? 저는 한 번만 받으실 거면 사이트 수집, 계속 쓰실 거면 API를 권해요."
 - en: "This site has an official API. According to the docs it's free up to 1,000 calls/month, paid beyond (link). The API is more accurate and never blocked; collecting from the site works right now without signing up. Which do you prefer? For a one-off I'd collect from the site; for something you'll repeat, the API."

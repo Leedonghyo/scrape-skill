@@ -48,6 +48,13 @@ node ~/.claude/skills/scrape/scripts/doctor.mjs --fix
 
 </details>
 
+<details>
+<summary>Playwright MCP 없이 쓰기 (Playwright CLI)</summary>
+
+브라우저 도구(MCP)가 없으면 Claude가 먼저 물어봅니다: MCP를 추가하고 재시작할지, 재시작 없이 Microsoft의 [Playwright CLI](https://github.com/microsoft/playwright-cli)를 설치하고 바로 계속할지. CLI를 고르면 `npm install -g @playwright/cli@latest` 한 번으로 같은 실제 Chrome 창을 띄워 분석합니다. 설치는 사용자가 고른 뒤에만 합니다.
+
+</details>
+
 ## 사용법
 
 그냥 말하면 됩니다. "모아줘", "수집해줘", "긁어줘", "크롤링", "스크래핑" 같은 말에 스킬이 발동합니다.
@@ -87,6 +94,7 @@ skills/scrape/
 │   └── selftest.mjs         회귀 테스트
 ├── references/
 │   ├── recipe.md            레시피 JSON 형식
+│   ├── cli-browser.md       Playwright MCP가 없을 때 CLI로 같은 단계를 하는 법
 │   ├── strategies.md        숨은 API, 응답 가로채기, 커서, HAR, 토큰 출처, 내장 JSON, 셀렉터, 페이지네이션, 상세 페이지
 │   ├── blocks.md            봇 차단의 계층과 벤더, 대응 순서
 │   └── messages.md          확인·상황별 문구 (한/영)
