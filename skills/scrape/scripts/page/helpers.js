@@ -200,7 +200,7 @@
     return qsa(s, sc === document ? document : sc);
   };
   S.resolve = resolve;
-  // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count', absolute } }
+  // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count', absolute } | { template } }
   // container: css for each item (one row per match). Omit for a single-row page.
   S.extract = (fields, container) => {
     const scopes = container ? qsa(container) : [document];
@@ -210,6 +210,7 @@
       let any = false;
       for (const [name, raw] of Object.entries(fields || {})) {
         const spec = typeof raw === 'string' ? { selector: raw } : raw || {};
+        if (spec.template != null) { row[name] = null; continue; } // filled below from the other columns
         const els = resolve(spec.selector, sc);
         // transform: "count" — the value is how many elements match (star icons, badges, thumbnails), not their text
         if (spec.transform === 'count') {
@@ -223,6 +224,17 @@
           row[name] = spec.join != null ? arr.join(spec.join) : arr;
         } else row[name] = els.length ? value(els[0], spec) : null;
         if (row[name] != null && row[name] !== '' && !(Array.isArray(row[name]) && !row[name].length)) any = true;
+      }
+      // template: "https://site/item/{id}" — same rule as finishRows in lib.mjs (empty if a placeholder is empty)
+      for (const [name, raw] of Object.entries(fields || {})) {
+        if (typeof raw?.template !== 'string') continue;
+        let missing = false;
+        const v = raw.template.replace(/\{([^{}]+)\}/g, (_, k) => {
+          const x = row[k];
+          if (x == null || x === '' || (Array.isArray(x) && !x.length)) { missing = true; return ''; }
+          return String(x);
+        });
+        row[name] = missing ? null : v;
       }
       if (any || !container) rows.push(row);
     }

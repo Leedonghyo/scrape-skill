@@ -230,6 +230,32 @@
         "A UTF-8-BOM CSV with 10 rows (text, author) was produced",
         "The CLI session was closed at the end (playwright-cli -s=scrape close)"
       ]
+    },
+    {
+      "id": 16,
+      "prompt": "https://news.ycombinator.com/ 글 100개 수집해줘",
+      "expected_output": "Top 100 stories collected from the official free HN API (topstories + item/{id}.json via detail.strategy http and a template column), not the site HTML, with the API named in the confirmation message.",
+      "files": [],
+      "expectations": [
+        "The recipe uses the official API (hacker-news.firebaseio.com), not news.ycombinator.com HTML",
+        "The confirmation message names the official API as the source in one line, with its docs link, and does not ask a separate API-vs-site question",
+        "100 rows in front-page rank order with title, points, author, comment count and an HN item link",
+        "Stories with no comments have comment count 0, not blank",
+        "The item URL and the HN link are template columns in the recipe, not added to the CSV afterwards",
+        "At most two assistant messages waited for a user reply"
+      ]
+    },
+    {
+      "id": 17,
+      "prompt": "https://stock.naver.com/news/flashnews 기사 100개 수집, 기사 링크도 넣어줘",
+      "expected_output": "100 flash-news rows whose article link column is built in the recipe with a template from officeId and articleId; re-running the recipe reproduces the link column with no manual post-processing.",
+      "files": [],
+      "expectations": [
+        "The recipe has a template field like https://n.news.naver.com/article/{언론사ID}/{기사ID}",
+        "The final CSV's link column was written by the collector, not by a script run on the CSV afterwards",
+        "Running the saved recipe again produces the same columns including the link",
+        "robots.txt and the terms prohibition were raised before any preview extraction"
+      ]
     }
   ]
 }

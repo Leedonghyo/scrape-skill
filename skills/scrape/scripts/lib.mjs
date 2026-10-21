@@ -126,6 +126,17 @@ export function validateRecipe(r) {
     if (!r.detail.fields || typeof r.detail.fields !== 'object') fail('"detail.fields" is required');
     if (r.detail.strategy === 'embedded' && !(r.detail.embedded?.source || r.embedded?.source)) fail('"detail.embedded.source" is required when detail.strategy is embedded');
   }
+  for (const [where, fields] of [['fields', r.fields], ['detail.fields', r.detail?.fields]]) {
+    for (const [n, f] of Object.entries(fields || {})) {
+      if (f?.template == null) continue;
+      if (typeof f.template !== 'string') fail(`"${where}.${n}.template" must be a string such as "https://site/item/{id}"`);
+      const known = new Set([...Object.keys(r.fields), ...Object.keys(r.detail?.fields || {})]);
+      for (const [, k] of f.template.matchAll(/\{([^{}]+)\}/g)) if (!known.has(k)) fail(`"${where}.${n}.template" uses {${k}}, which is not a column of this recipe`);
+    }
+  }
+  const req = r.items?.require;
+  if (req != null && !(Array.isArray(req) && req.every((k) => typeof k === 'string' && k in r.fields))) fail('"items.require" must be a list of column names from "fields"');
+  if (r.detail?.strategy != null && !['dom', 'embedded', 'http'].includes(r.detail.strategy)) fail('"detail.strategy" must be dom, embedded or http');
   if (r.output?.format && !FORMATS.includes(r.output.format)) fail(`"output.format" must be one of ${FORMATS.join(', ')}`);
 }
 
@@ -262,6 +273,7 @@ function walkPath(obj, segs) {
 // One column from one JSON row. Mirrors value() in helpers.js: regex (group 1 wins), then transform.
 export function jsonField(row, raw) {
   const spec = typeof raw === 'string' ? { path: raw } : raw || {};
+  if (spec.template != null) return null; // filled from the other columns by finishRows
   let v = getPath(row, spec.path ?? spec.selector ?? '');
   if (v === undefined) v = null;
   // transform: "count" — how many, not which: array length (a missing value counts 0, a single value 1)
@@ -286,13 +298,38 @@ export function jsonRows(data, items, fields) {
   const p = items?.path;
   let rows = p ? getPath(data, p) : data;
   if (rows == null) return [];
-  const iterations = (p?.match(/\[\]/g) || []).length;
+  const iterations = p ? pathSegments(p).filter((x) => x === ITER).length : 0;
   rows = Array.isArray(rows) ? (iterations > 1 ? rows.flat(iterations - 1) : rows) : [rows];
   const names = Object.keys(fields || {});
   return rows
     .filter((r) => r != null)
     .map((r) => (names.length ? Object.fromEntries(names.map((n) => [n, jsonField(r, fields[n])])) : r && typeof r === 'object' && !Array.isArray(r) ? r : { value: r }))
     .filter(hasAnyValue);
+}
+
+// ---------- finishing rows: columns computed after extraction ----------
+// template: "https://n.news.naver.com/article/{언론사ID}/{기사ID}" builds a column from the row's other columns
+// (empty if any placeholder is empty). absolute: true resolves a relative URL against base; a string is its own base
+// (dom fields already resolve href/src in the page). require: ["순위"] drops rows missing those columns (banners, ads).
+export function fillTemplate(tmpl, row) {
+  let missing = false;
+  const out = tmpl.replace(/\{([^{}]+)\}/g, (_, k) => {
+    if (isEmpty(row[k])) { missing = true; return ''; }
+    return String(row[k]);
+  });
+  return missing ? null : out;
+}
+
+export function finishRows(rows, fields, { base, require } = {}) {
+  const specs = Object.entries(fields || {}).filter(([, raw]) => raw && typeof raw === 'object');
+  for (const row of rows) {
+    for (const [n, s] of specs) {
+      if (!s.absolute || typeof row[n] !== 'string' || !row[n]) continue;
+      try { row[n] = new URL(row[n], typeof s.absolute === 'string' ? s.absolute : base).href; } catch { /* leave as is */ }
+    }
+    for (const [n, s] of specs) if (typeof s.template === 'string') row[n] = fillTemplate(s.template, row);
+  }
+  return require?.length ? rows.filter((r) => require.every((k) => !isEmpty(r[k]))) : rows;
 }
 
 // ---------- cursor pagination and request templates ----------

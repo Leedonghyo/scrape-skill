@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "name": "hn-api",
+  "source": "https://news.ycombinator.com/",
+  "strategy": "http",
+  "pages": { "type": "urls", "urls": ["https://hacker-news.firebaseio.com/v0/topstories.json"] },
+  "items": { "path": "[]" },
+  "fields": {
+    "id": "$",
+    "api": { "template": "https://hacker-news.firebaseio.com/v0/item/{id}.json" },
+    "HN링크": { "template": "https://news.ycombinator.com/item?id={id}" }
+  },
+  "detail": {
+    "strategy": "http",
+    "url_field": "api",
+    "fields": {
+      "제목": "title",
+      "링크": "url",
+      "점수": "score",
+      "작성자": "by",
+      "댓글수": "descendants",
+      "작성시각": "time",
+      "종류": "type"
+    }
+  },
+  "rate": { "delay_ms": 300, "jitter_ms": 100 },
+  "output": { "format": "csv", "dedupe_key": "id" },
+  "notes": "Example: an official free API (github.com/HackerNews/API) instead of the site. The list call returns ids in rank order (the CSV keeps that order); a template turns each id into its item URL and detail.strategy http reads one JSON document per story. Faster and more exact than the site (descendants is 0, not blank) and free of the site's 30 s crawl-delay. Use --limit to cap the stories."
+}

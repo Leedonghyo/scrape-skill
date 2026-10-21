@@ -23,7 +23,7 @@ import vm from 'node:vm';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
-  getPath, jsonField, jsonRows, detectBlockedHttp, extractEmbedded,
+  getPath, jsonField, jsonRows, finishRows, detectBlockedHttp, extractEmbedded,
   csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, nextUrl, noiseRegex, decodeProtobuf, decodeBinaryFrame, messageMatches, UsageError,
 } from './lib.mjs';
 import { objectArrays } from './har-scan.mjs';
@@ -74,6 +74,16 @@ function fixtureServer(port = 0) {
   const server = http.createServer((req, res) => {
     const u = new URL(req.url, 'http://x');
     if (u.pathname === '/feed') return send(res, 200, 'text/html; charset=utf-8', feedHtml);
+    // HN-style official API: a list of ids, then one JSON document per id (detail.strategy http)
+    if (u.pathname === '/api/top') return send(res, 200, 'application/json', JSON.stringify([3, 1, 2, 4]));
+    {
+      const m = u.pathname.match(/^\/api\/item\/(\d+)\.json$/);
+      if (m) {
+        const id = Number(m[1]);
+        if (id > 4) return send(res, 404, 'application/json', 'null');
+        return send(res, 200, 'application/json', JSON.stringify(id === 4 ? { id, type: 'job', title: 'We are hiring' } : { id, type: 'story', title: `Story ${id}`, score: id * 10, url: `/out/${id}` }));
+      }
+    }
     if (u.pathname === '/app') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture app</title></head><body><h1>Fixture app</h1><script>
   const token = localStorage.getItem('access_token');
   fetch('/api/private', { headers: token ? { authorization: 'Bearer ' + token } : {} }).catch(() => {});
@@ -208,6 +218,32 @@ ok('getPath missing', getPath({ a: 1 }, 'a.z.y') === undefined);
   ok('helpers.js getPath matches lib.mjs on ["dotted.key"]', eq(got, ['a', 'b']), got);
   const arrs = objectArrays(remix);
   ok('har-scan objectArrays emits a bracketed path that getPath can follow', arrs.includes('state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[]') && eq(getPath(remix, arrs.find((a) => a.endsWith('buySellArticles[]'))), remix.state.loaderData['routes/kr.search.buy-sell._index'].buySellArticles), arrs);
+}
+
+// finishRows: templates from other columns, absolute URLs for JSON fields, required columns drop banner rows
+{
+  const fields = { 언론사ID: 'o', 기사ID: 'a', 링크: { template: 'https://n.news.naver.com/article/{언론사ID}/{기사ID}' }, href: { path: 'h', absolute: true }, own: { path: 'h', absolute: 'https://cdn.test/x/' } };
+  const rows = jsonRows([{ o: '011', a: '0004673621', h: '/kr/buy-sell/a/' }, { o: '277', h: 'b' }, {}], { path: '[]' }, fields);
+  const done = finishRows(rows, fields, { base: 'https://www.daangn.com/kr/buy-sell/', require: ['언론사ID'] });
+  ok('finishRows template', done[0]['링크'] === 'https://n.news.naver.com/article/011/0004673621', done[0]);
+  ok('finishRows template is empty when a placeholder is empty', done[1]['링크'] === null, done[1]);
+  ok('finishRows absolute: true uses base, a string is its own base', done[0].href === 'https://www.daangn.com/kr/buy-sell/a/' && done[1].href === 'https://www.daangn.com/kr/buy-sell/b' && done[1].own === 'https://cdn.test/x/b', done);
+  ok('finishRows require drops rows missing a column', done.length === 2);
+  ok('jsonField template is left for finishRows', jsonField({ a: 1 }, { template: '{a}' }) === null);
+  const base = { version: 1, name: 't', strategy: 'http', pages: { type: 'single', start: 'https://a.test/' }, http: { url_template: 'https://a.test/api' } };
+  throws('validateRecipe: template with an unknown column', () => validateRecipe({ ...base, fields: { a: 'a', u: { template: '/x/{nope}' } } }));
+  throws('validateRecipe: items.require with an unknown column', () => validateRecipe({ ...base, items: { path: '[]', require: ['nope'] }, fields: { a: 'a' } }));
+  throws('validateRecipe: unknown detail.strategy', () => validateRecipe({ ...base, fields: { a: 'a' }, detail: { strategy: 'graphql', url_field: 'a', fields: { b: 'b' } } }));
+  validateRecipe({ ...base, items: { path: '[]', require: ['a'] }, fields: { a: 'a', u: { template: '/x/{a}/{b}' } }, detail: { strategy: 'http', url_field: 'u', fields: { b: 'b' } } });
+  ok('validateRecipe: template may use detail columns', true);
+  // the page helper fills the same template in previews and the real-browser fallback
+  const card = { querySelectorAll: (sel) => (sel === '.id' ? [{ textContent: '42', getAttribute: () => null }] : []) };
+  const g = { URL, console, location: { href: 'https://a.test/', origin: 'https://a.test' }, document: { readyState: 'loading', cookie: '', querySelectorAll: (sel) => (sel === '.card' ? [card] : []) }, __scrape_no_net: true };
+  g.window = g;
+  vm.createContext(g);
+  vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+  const got = JSON.parse(vm.runInContext('JSON.stringify(window.__scrape.extract({ id: ".id", url: { template: "https://a.test/item/{id}" } }, ".card"))', g));
+  ok('helpers.js extract fills a template column', eq(got, [{ id: '42', url: 'https://a.test/item/42' }]), got);
 }
 
 // jsonField: regex -> map -> transform order, and passthrough of unknown map keys
@@ -569,6 +605,9 @@ if (!offline) {
     // param pages whose tail lazy-loads: wait.scroll brings each page from 10 to 20 items
     ['local-lazy-scroll', local(LAZY), [], 40, (s) => s.rows === 40 && s.pages_done === 3 && s.stopped_reason === 'empty_page'],
     ['local-intercept-cursor', local(FEED), [], 20, (s) => s.rows === 20 && s.intercepted === 4 && s.stopped_reason === 'cursor_end'],
+    // ids → item/{id}.json: a template builds each item's API URL, detail.strategy http reads it, relative url made absolute
+    ['local-detail-http', local({ version: 1, name: 'local-detail-http', source: `${FIXTURE_ORIGIN}/`, strategy: 'http', pages: { type: 'urls', urls: [`${FIXTURE_ORIGIN}/api/top`] }, items: { path: '[]' }, fields: { id: '$', api: { template: `${FIXTURE_ORIGIN}/api/item/{id}.json` }, hn: { template: 'https://news.ycombinator.com/item?id={id}' } }, detail: { strategy: 'http', url_field: 'api', fields: { title: 'title', score: 'score', link: { path: 'url', absolute: true } } }, rate: { delay_ms: 50, jitter_ms: 10 } }), [], 4,
+      (s) => s.rows === 4 && s.sample[0].id === 3 && s.sample[0].title === 'Story 3' && s.sample[0].score === 30 && s.sample[0].link === `${fixture.origin}/out/3` && s.sample[0].hn === 'https://news.ycombinator.com/item?id=3' && s.fill_rate.title === 1 && s.fill_rate.score === 0.75],
   );
   for (const [recipe, file, args, minRows, extra] of live) {
     const res = await run(file, args);

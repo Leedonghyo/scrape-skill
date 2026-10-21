@@ -81,7 +81,7 @@ For APIs that return "where to continue" instead of accepting a page number (`ne
 ## `items`
 
 - `dom`: `{ "container": "article.product_pod" }`. Each match is one row; field selectors are evaluated inside it.
-- `http` / `embedded` / `intercept`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array). A key that holds dots or brackets goes in quotes inside brackets: `state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[]` (Remix route ids, `"a.b"` keys); `\"` and `\\` escape inside the quotes, and single quotes work too. Each element is one row. With `fields: {}` the row keeps its own top-level keys.
+- `http` / `embedded` / `intercept`: `{ "path": "data.products[]" }`. Path grammar: `a.b[0].c`, and `[]` means "iterate this array" (`"[]"` alone when the root is the array; `"$"` is the row itself, for arrays of plain ids). A key that holds dots or brackets goes in quotes inside brackets: `state.loaderData["routes/kr.search.buy-sell._index"].buySellArticles[]` (Remix route ids, `"a.b"` keys); `\"` and `\\` escape inside the quotes, and single quotes work too. Each element is one row. With `fields: {}` the row keeps its own top-level keys.
 
 ## `fields`
 
@@ -97,6 +97,8 @@ A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` fo
 | `regex` | both | applied to the string value; first capture group wins, else whole match |
 | `map` | both | `{ "One": 1, "Two": 2, … }` — replaces the value after `regex`; unknown values pass through. Star ratings in class names, status words, "Y"/"N" flags |
 | `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim`, `count` |
+| `template` | both | `"https://n.news.naver.com/article/{언론사ID}/{기사ID}"` — a column built from the row's other columns (list or detail) after extraction; empty when any placeholder is empty. Takes no `selector`/`path` |
+| `absolute` | both | `true` resolves a relative URL (`/kr/buy-sell/…`) against `source` (detail fields: against the detail URL); a string is its own base. `dom` already does this for `href`/`src` |
 
 Order of operations per field: take the value (`attr`/`path`) → `regex` → `map` → `transform`. `count` is the exception: it replaces the value with *how many* there are and ignores `attr`/`regex`/`map` — the number of elements matching `selector` inside the container (`dom`), or the length of the array at `path` (`http`/`embedded`/`intercept`; a missing value counts 0).
 
@@ -105,6 +107,24 @@ Values that are only visible as repeated icons (five `<svg>` stars for a 5-star 
 Include the item's URL as a column whenever there is one, even if the user did not ask: it is the natural `dedupe_key`, it lets the user open the item, and titles are rarely unique.
 
 Prefer selectors in this order: `data-testid`/`id` > semantic tag + meaningful class > tag path. Hashed classes (`css-1x2y3z`, `sc-bdVaJa`) break on the next deploy; the helper already avoids them.
+
+## Finishing rows
+
+Whatever a person would fix in the CSV after the run belongs in the recipe, so "run it again" gives the same table:
+
+```json
+"items": { "path": "data.modules[].items[]", "require": ["순위"] },
+"fields": {
+  "순위": "image.rank",
+  "기사ID": "articleId", "언론사ID": "officeId",
+  "기사링크": { "template": "https://n.news.naver.com/article/{언론사ID}/{기사ID}" },
+  "링크": { "path": "href", "absolute": true }
+}
+```
+
+- `items.require`: rows with an empty value in any listed column are dropped before dedupe and `--limit` (banners and ads mixed into a list; 102 rows → the 101 products).
+- `template` and `absolute` run on every row in the collector, and `template` also in `extract()`/`collectInto()`, so the preview table shows the built column.
+- Order per row: `absolute`, then templates in field order (a template may use an earlier template), then `require`. Detail rows are finished again after the detail columns arrive.
 
 ## `detail`
 
@@ -115,6 +135,15 @@ Prefer selectors in this order: `data-testid`/`id` > semantic tag + meaningful c
   "fields": { "description": "#product_description ~ p", "upc": "table tr:nth-child(1) td" },
   "max_items": 200
 }
+```
+
+`detail.strategy` is `dom` (default, the browser), `embedded`, or `http`: one JSON document per item, for official APIs that list ids and serve each item separately. Build the item's API URL with a template and read it with JSON paths (`examples/hn-api.json`):
+
+```json
+"pages": { "type": "urls", "urls": ["https://hacker-news.firebaseio.com/v0/topstories.json"] },
+"items": { "path": "[]" },
+"fields": { "id": "$", "api": { "template": "https://hacker-news.firebaseio.com/v0/item/{id}.json" } },
+"detail": { "strategy": "http", "url_field": "api", "fields": { "title": "title", "score": "score" } }
 ```
 
 The collector visits each row's `url_field` (respecting `rate`) and merges the extra columns; a detail value overrides a list value of the same name unless it is empty. `max_items` caps detail visits per run (dry runs visit at most 3). Detail pages are fetched with the browser even when the list came from `http`, unless `detail.strategy` is `"embedded"` (then `detail.embedded.source`, falling back to the top-level `embedded.source`, and optional `detail.items.path`).

@@ -17,7 +17,7 @@ import {
   UsageError, EnvError, BlockedError,
   expandHome, sleep, isEmpty, hasAnyValue, shorten, localDate, jittered, parseArgs, loadRecipe,
   defaultHeaders, mergeHeaders, loadStorageState, cookieHeader, detectBlockedHttp,
-  jsonRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse, cursorUrl, fillBody, nextCursor, nextUrl, decodeBinaryFrame, messageMatches,
+  jsonRows, finishRows, extractEmbedded, writeRows, fillRate, unionColumns, tryParse, cursorUrl, fillBody, nextCursor, nextUrl, decodeBinaryFrame, messageMatches,
 } from './lib.mjs';
 
 const USAGE = `usage: node collect.mjs <recipe.json | recipe-name> [--max-pages N] [--limit N] [--dry-run] [--out PATH]
@@ -147,8 +147,10 @@ class Collector {
     });
   }
 
-  // Dedupe → cap to --limit → fetch detail pages → keep. Returns the rows actually kept.
+  // Finish (templates, absolute URLs, required columns) → dedupe → cap to --limit → fetch detail pages → keep.
+  // Returns the rows actually kept.
   async acceptRows(rows) {
+    rows = finishRows(rows, this.recipe.fields, { base: this.recipe.source, require: this.recipe.items?.require });
     rows = this.dedupe(rows);
     const limit = this.opts.limit;
     if (limit) rows = rows.slice(0, Math.max(0, limit - this.rows.length));
@@ -533,6 +535,11 @@ class Collector {
           await this.pause();
           const res = await this.fetchText(url, null, 'html');
           extra = jsonRows(extractEmbedded(res.text, d.embedded?.source ?? this.recipe.embedded?.source), d.items, d.fields)[0];
+        } else if (d.strategy === 'http') {
+          // A JSON endpoint per item (official APIs like HN's item/{id}.json), built with a template field.
+          await this.pause();
+          const res = await this.fetchText(url, d.http ?? null, 'json');
+          extra = jsonRows(this.parseJson(res), d.items, d.fields)[0];
         } else {
           const page = await this.page();
           await this.pause();
@@ -541,6 +548,7 @@ class Collector {
         }
         // Detail values win, but never erase a list value with an empty one.
         for (const [k, v] of Object.entries(extra || {})) if (!isEmpty(v) || !(k in row)) row[k] = v;
+        finishRows([row], { ...this.recipe.fields, ...d.fields }, { base: url }); // templates may use detail columns
         this.log(`  detail ${this.detailCount}${Number.isFinite(max) ? '/' + max : ''}: ${shorten(url, 70)}`);
       } catch (e) {
         if (e instanceof BlockedError) throw e;
