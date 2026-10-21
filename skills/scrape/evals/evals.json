@@ -216,7 +216,7 @@
       ]
     },
     {
-      "id": 12,
+      "id": 15,
       "prompt": "https://quotes.toscrape.com/ 명언이랑 작가 첫 페이지만 표로 정리해줘",
       "expected_output": "Run in a session WITHOUT Playwright MCP tools. The assistant notices the browser tools are missing, offers MCP+restart vs Playwright CLI (recommending CLI), installs nothing before the user picks, and after the user picks the CLI drives a headed Chrome with `playwright-cli -s=scrape`, installs helpers via run-code, shows sample rows and a highlighted screenshot, writes the CSV, and closes the CLI session.",
       "files": [],
