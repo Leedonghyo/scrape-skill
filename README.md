@@ -1,5 +1,7 @@
 # scrape — 사이트에서 데이터가 필요한 사람을 위한 Claude Code 스킬
 
+한국어 · [English](README.en.md)
+
 *Web scraping skill for Claude Code: describe the data, get a CSV — no selectors, no code. (web scraping · crawler · Playwright · Claude Code plugin · 크롤링 · 데이터 수집)*
 
 URL 하나와 한 문장을 주면 CSV로 받습니다. 셀렉터, 코드, 스크래핑 용어를 몰라도 됩니다.
@@ -147,7 +149,7 @@ v0.6입니다. 쇼핑몰 목록, 뉴스·블로그 목록, 채용 공고를 먼�
 <details>
 <summary>English</summary>
 
-A Claude Code skill that turns "collect X from this site" into a CSV, for people who don't know scraping. Claude analyzes the page in a real Chrome window, confirms the mapping with sample rows and a highlighted screenshot, collects with rate limiting, and saves a reusable recipe. When a site pushes back (official API, login, paywall, robots.txt, bot checks) it states the facts and lets you decide; it never solves CAPTCHAs, hides automation, rotates proxies, or reimplements request signing. APIs that only answer a real browser are read from the responses the page itself receives (`intercept`); cursor/GraphQL pagination and finding the API from a saved HAR file are supported. Install with the three commands above. Works in Claude Code and the Claude desktop app only.
+A Claude Code skill that turns "collect X from this site" into a CSV, for people who don't know scraping. Claude analyzes the page in a real Chrome window, confirms the mapping with sample rows and a highlighted screenshot, collects with rate limiting, and saves a reusable recipe. When a site pushes back (official API, login, paywall, robots.txt, bot checks) it states the facts and lets you decide; it never solves CAPTCHAs, hides automation, rotates proxies, or reimplements request signing. APIs that only answer a real browser are read from the responses the page itself receives (`intercept`); cursor/GraphQL pagination and finding the API from a saved HAR file are supported. Install with the three commands above. Works in Claude Code and the Claude desktop app only. Full English README: [README.en.md](README.en.md).
 
 </details>
 
