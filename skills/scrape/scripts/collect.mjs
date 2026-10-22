@@ -251,6 +251,9 @@ class Collector {
   }
 
   // Infinite scroll: one navigation, then scroll/click until the item count stops growing.
+  // dom with a container: rows are harvested every round, because virtualized feeds (Reddit, X) remove the
+  // posts that scrolled out of view — the DOM count can go 55 → 30, and an extract at the end sees only the
+  // last screen. Growth is the number of distinct rows seen so far, not what is on the page right now.
   async runScroll(maxRounds) {
     const page = await this.page();
     await this.pause();
@@ -273,14 +276,26 @@ class Collector {
       if (cap) await take(true);
       this.pagesDone = first;
       const container = this.recipe.items?.container || null;
+      const seen = new Map(); // dedupe key (or the whole row) → row, in the order first seen
+      const keyField = this.recipe.output?.dedupe_key;
+      const harvest = async () => {
+        for (const row of await this.extractDom(page, this.recipe.fields, container)) {
+          const k = keyField && !isEmpty(row[keyField]) ? `k:${row[keyField]}` : `r:${JSON.stringify(row)}`;
+          if (!seen.has(k)) seen.set(k, row);
+        }
+        return seen.size;
+      };
+      // --limit: stop scrolling once enough rows would survive finishing (require), instead of scrolling to the end.
+      const enough = () => !!this.opts.limit && finishRows([...seen.values()].map((r) => ({ ...r })), this.recipe.fields, { base: this.recipe.source, require: this.recipe.items?.require }).length >= this.opts.limit - this.rows.length;
       const count = async () => {
         if (cap) { await take(false); return hits.length; }
-        return page.evaluate((c) => (c ? document.querySelectorAll(c).length : (document.scrollingElement || document.documentElement).scrollHeight), container);
+        if (container) return harvest();
+        return page.evaluate(() => (document.scrollingElement || document.documentElement).scrollHeight);
       };
       const idle = this.pages.idle_ms ?? 1500;
       let last = await count();
       let stale = 0;
-      for (let round = 1; round <= maxRounds - first && !ended && !this.aborted; round++) {
+      for (let round = 1; round <= maxRounds - first && !ended && !this.aborted && !(container && !cap && enough()); round++) {
         const clicked = this.pages.load_more_selector
           ? await page.evaluate((s) => { const b = document.querySelector(s); if (!b) return false; b.scrollIntoView({ block: 'center' }); b.click(); return true; }, this.pages.load_more_selector)
           : false;
@@ -288,16 +303,19 @@ class Collector {
         await sleep(idle);
         const now = await count();
         this.pagesDone = round + first;
-        this.log(`scroll round ${round}/${maxRounds - first} → ${now} ${cap ? 'responses' : container ? 'items' : 'px'}`);
+        this.log(`scroll round ${round}/${maxRounds - first} → ${now} ${cap ? 'responses' : container ? 'rows seen' : 'px'}`);
         if (now <= last && ++stale >= 2) { this.stop = 'scroll_idle'; break; } // one grace round for slow loaders
         if (now > last) stale = 0;
         last = now;
       }
       if (this.aborted) this.stop = 'interrupted';
+      if (!this.stop && container && !cap && enough()) this.stop = 'limit';
       if (!this.stop) this.stop = 'max_pages';
       if (ended) this.stop = 'cursor_end';
       if (cap && !hits.length) this.stop = 'empty_page'; // nothing matched intercept.url_match at all
-      rows = cap ? this.hitRows(hits) : await this.extractDom(page, this.recipe.fields, container);
+      if (cap) rows = this.hitRows(hits);
+      else if (container) { await harvest(); rows = [...seen.values()]; }
+      else rows = await this.extractDom(page, this.recipe.fields, container);
     } finally { cap?.stop(); }
     const kept = await this.acceptRows(rows);
     this.log(`extracted ${kept.length} rows after scrolling`);

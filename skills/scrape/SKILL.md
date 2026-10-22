@@ -147,7 +147,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 | `requestOrigins({match, frames})` | API 호출별 헤더 이름, 값의 출처(`storage:<key>` / `cookie:<name>` / `computed`), 보낸 스크립트 위치. 값은 반환하지 않음. 헬퍼 설치 후 새로고침해야 첫 요청부터 보임(`references/strategies.md`) |
 | `diagnose()` | 봇 차단 벤더/종류, 로그인 벽, 유료 벽 신호 |
 | `await robots(path)` | 이 출처의 robots.txt 판정. `crawl_delay`(초)가 있으면 그 값 × 1000을 `rate.delay_ms`의 하한으로 쓴다 |
-| `await autoScroll({rounds, container})` | 무한 스크롤 테스트. 스크롤 후 항목 수 |
+| `await autoScroll({rounds, container})` | 무한 스크롤 테스트. 스크롤 후 항목 수. 레딧처럼 지난 글을 지우는 피드는 수가 줄기도 하지만, 수집기가 라운드마다 행을 모으므로 `pages.type: scroll` 그대로 됩니다 |
 | `collectInto(fields, container, {dedupe_key, reset})` | 실제 브라우저 폴백: 이 페이지를 추출해 localStorage에 누적(네비게이션을 넘어 유지) |
 | `drain()` / `collectStatus()` | 모은 것 전부 반환+비움 / 지금까지 개수 |
 

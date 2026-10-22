@@ -117,13 +117,13 @@ npm test              # offline unit tests + live runs of the example recipes (s
 npm run test:offline  # unit tests only
 ```
 
-168 tests in total: 145 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume).
+172 tests in total: 145 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, feeds that drop old posts, captcha walls vs. harmless widgets).
 
 ## Limits and what's next
 
 This is v0.6, aimed first at shop listings, news and blog lists, and job boards.
 
-- Works: infinite scroll, detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files
+- Works: infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files
 - Not yet: shadow DOM, content inside iframes, non-Protobuf binary formats (MessagePack, CBOR)
 - Next: scheduled runs and change tracking, a login helper, tracking-parameter cleanup and relative-time conversion, xlsx output, an MCP wrapper for other LLMs
 

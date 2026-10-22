@@ -98,6 +98,20 @@ function fixtureServer(port = 0) {
   addEventListener('scroll', () => { if (done || innerHeight + scrollY < document.body.scrollHeight - 400) return; done = true; setTimeout(() => document.getElementById('list').insertAdjacentHTML('beforeend', tail), 150); });
 </script></body></html>`);
     }
+    // Virtualized feed (Reddit, X): 50 posts, 10 per load, but only the newest 15 stay in the DOM.
+    if (u.pathname === '/recycle') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture recycle</title></head><body><ul id="list"></ul><script>
+  let next = 1, busy = false;
+  const add = () => {
+    const list = document.getElementById('list');
+    for (let i = 0; i < 10 && next <= 50; i++, next++) list.insertAdjacentHTML('beforeend', '<li class="post" style="height:300px" data-id="' + next + '"><a href="/p/' + next + '">Post ' + next + '</a></li>');
+    while (list.children.length > 15) list.firstElementChild.remove();
+  };
+  add();
+  addEventListener('scroll', () => { if (busy || next > 50 || innerHeight + scrollY < document.body.scrollHeight - 400) return; busy = true; setTimeout(() => { add(); busy = false; }, 150); });
+</script></body></html>`);
+    // A thin page whose content IS the captcha (Reddit's headless answer) vs. a full list that merely ships a widget.
+    if (u.pathname === '/wall') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Reddit - Prove your humanity</title></head><body><h1>Prove your humanity</h1><p>Complete the challenge below and let us know you're a real person.</p><div class="g-recaptcha" data-sitekey="x"></div></body></html>`);
+    if (u.pathname === '/widget') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture widget</title></head><body><ul>${PRODUCTS.map((p) => `<li class="product"><b>${p.title}</b> — a long enough description so the page reads as real content, not a wall: size, colour, material, care notes and shipping.</li>`).join('')}</ul><form id="login" hidden><div class="g-recaptcha" data-sitekey="x"></div></form></body></html>`);
     if (u.pathname === '/api/private') {
       if (req.headers.authorization !== `Bearer ${FIXTURE_TOKEN}`) return json(res, 401, { error: 'sign in' });
       return json(res, 200, { data: { items: PRODUCTS.slice(0, 5) } });
@@ -630,6 +644,7 @@ if (!offline) {
   ];
   const GQL = { version: 1, name: 'local-cursor-graphql', strategy: 'http', pages: { type: 'cursor', cursor_path: 'data.posts.pageInfo.endCursor' }, http: { url_template: `${FIXTURE_ORIGIN}/graphql`, method: 'POST', body: { query: 'query Posts($after: String) { posts(first: 5, after: $after) { edges { node { id title } } pageInfo { endCursor hasNextPage } } }', variables: { after: '{cursor}' } } }, items: { path: 'data.posts.edges[]' }, fields: { id: 'node.id', title: 'node.title' }, rate: { delay_ms: 100, jitter_ms: 50, concurrency: 4 } };
   const FEED = { version: 1, name: 'local-intercept-cursor', strategy: 'intercept', pages: { type: 'cursor', start: `${FIXTURE_ORIGIN}/feed`, cursor_path: 'next_cursor', load_more_selector: '#more', idle_ms: 500 }, intercept: { url_match: '/api/feed', timeout_ms: 5000 }, items: { path: 'items[]' }, fields: { id: 'id', title: 'title' } };
+  const RECYCLE = { version: 1, name: 'local-recycle-scroll', source: `${FIXTURE_ORIGIN}/`, strategy: 'dom', pages: { type: 'scroll', start: `${FIXTURE_ORIGIN}/recycle`, max_rounds: 20, idle_ms: 500 }, wait: { selector: 'li.post' }, items: { container: 'li.post' }, fields: { id: { attr: 'data-id' }, title: 'a', link: { selector: 'a', attr: 'href' } }, output: { dedupe_key: 'link' }, rate: { delay_ms: 100, jitter_ms: 50 } };
   const LAZY = { version: 1, name: 'local-lazy-scroll', strategy: 'dom', pages: { type: 'param', template: `${FIXTURE_ORIGIN}/lazy?page={n}`, max_pages: 5 }, wait: { selector: 'li.item', scroll: { count: 20, idle_ms: 400 } }, items: { container: 'li.item' }, fields: { item: ':scope' }, rate: { delay_ms: 100, jitter_ms: 50 } };
   live.push(
     // http + cursor: 4 pages x 5 rows, first request without the cursor param, null cursor ends the run
@@ -648,6 +663,12 @@ if (!offline) {
     // param pages whose tail lazy-loads: wait.scroll brings each page from 10 to 20 items
     ['local-lazy-scroll', local(LAZY), [], 40, (s) => s.rows === 40 && s.pages_done === 3 && s.stopped_reason === 'empty_page'],
     ['local-intercept-cursor', local(FEED), [], 20, (s) => s.rows === 20 && s.intercepted === 4 && s.stopped_reason === 'cursor_end'],
+    // virtualized feed: the DOM never holds more than 15 posts, yet all 50 are harvested round by round, in order
+    ['local-recycle-scroll', local(RECYCLE), [], 50, (s) => s.rows === 50 && s.stopped_reason === 'scroll_idle' && s.sample[0].id === '1' && s.fill_rate.link === 1],
+    // same feed, --limit 25: stops scrolling once 25 rows are in hand instead of running to the end
+    ['local-recycle-limit', local({ ...RECYCLE, name: 'local-recycle-limit' }), ['--limit', '25'], 25, (s) => s.rows === 25 && s.stopped_reason === 'limit' && s.pages_done < 5],
+    // a full page that merely ships a hidden reCAPTCHA (login form) is not a block
+    ['local-captcha-widget', local({ version: 1, name: 'local-captcha-widget', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/widget` }, items: { container: 'li.product' }, fields: { title: 'b' } }), [], 15, (s) => s.rows === 15 && s.fill_rate.title === 1],
     // ids → item/{id}.json: a template builds each item's API URL, detail.strategy http reads it, relative url made absolute
     ['local-detail-http', local({ version: 1, name: 'local-detail-http', source: `${FIXTURE_ORIGIN}/`, strategy: 'http', pages: { type: 'urls', urls: [`${FIXTURE_ORIGIN}/api/top`] }, items: { path: '[]' }, fields: { id: '$', api: { template: `${FIXTURE_ORIGIN}/api/item/{id}.json` }, hn: { template: 'https://news.ycombinator.com/item?id={id}' } }, detail: { strategy: 'http', url_field: 'api', fields: { title: 'title', score: 'score', link: { path: 'url', absolute: true } } }, rate: { delay_ms: 50, jitter_ms: 10 } }), [], 4,
       (s) => s.rows === 4 && s.sample[0].id === 3 && s.sample[0].title === 'Story 3' && s.sample[0].score === 30 && s.sample[0].link === `${fixture.origin}/out/3` && s.sample[0].hn === 'https://news.ycombinator.com/item?id=3' && s.fill_rate.title === 1 && s.fill_rate.score === 0.75],
@@ -663,6 +684,9 @@ if (!offline) {
   // intercept: the API refusing the browser itself is a block (exit 3), not an empty page
   const refused = await run(local({ version: 1, name: 'local-intercept-refused', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/refused` }, intercept: { url_match: '/api/refused', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id' } }), []);
   ok('live intercept: refused API → blocked, exit 3', refused.code === 3 && refused.summary.stopped_reason === 'blocked' && refused.summary.blocked_by?.status === 403, { code: refused.code, stopped: refused.summary.stopped_reason });
+  // a thin page whose content is the captcha (what Reddit serves a headless browser) is a real block: exit 3
+  const wall = await run(local({ version: 1, name: 'local-captcha-wall', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/wall` }, items: { container: 'li' }, fields: { t: ':scope' } }), []);
+  ok('live captcha wall → blocked (google / captcha), exit 3', wall.code === 3 && wall.summary.stopped_reason === 'blocked' && wall.summary.blocked_by?.kind === 'captcha', { code: wall.code, stopped: wall.summary.stopped_reason, by: wall.summary.blocked_by });
   // intercept settle: a second call shortly after the first is still collected, without a long fixed wait
   const twice = await run(local({ version: 1, name: 'local-intercept-twice', strategy: 'intercept', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/twice` }, intercept: { url_match: '/api/search', timeout_ms: 5000 }, items: { path: 'data.items[]' }, fields: { id: 'id' } }), []);
   ok('live intercept: both calls of one page are collected', twice.summary.rows === 10 && twice.summary.intercepted === 2, { rows: twice.summary.rows, intercepted: twice.summary.intercepted });
