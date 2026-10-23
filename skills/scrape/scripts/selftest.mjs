@@ -287,8 +287,8 @@ ok('getPath missing', getPath({ a: 1 }, 'a.z.y') === undefined);
   ok('date: zone-less text keeps its wall clock', d('2026-10-21 13:52:42') === '2026-10-21 13:52:42' && d('2026-10-21T09:05') === '2026-10-21 09:05:00' && d('2026-10-21') === '2026-10-21');
   ok('date: not a date passes through', d('미정') === '미정' && d(null) === null);
   // the same text must give the same answer on a machine in another zone
-  const other = spawnSync(process.execPath, ['-e', `import('./lib.mjs').then((L) => console.log([L.toLocalTime('2026. 10. 21. 15:10'), L.toLocalTime('2026-10-22T01:00:00.000Z')].join('|')))`], { cwd: DIR, env: { ...process.env, TZ: 'America/New_York' }, encoding: 'utf8' });
-  ok('date: independent of the machine time zone', other.stdout.trim() === '2026-10-21 15:10:00|2026-10-22 10:00:00', other.stdout.trim() || other.stderr);
+  const other = spawnSync(process.execPath, ['-e', `import('./lib.mjs').then((L) => console.log([L.toLocalTime('2026. 10. 21. 15:10'), L.toLocalTime('2026-10-22T01:00:00.000Z'), L.toLocalTime('Fri Oct 23 04:54:24 +0000 2026')].join('|')))`], { cwd: DIR, env: { ...process.env, TZ: 'America/New_York' }, encoding: 'utf8' });
+  ok('date: independent of the machine time zone', other.stdout.trim() === '2026-10-21 15:10:00|2026-10-22 10:00:00|2026-10-23 13:54:24', other.stdout.trim() || other.stderr);
 }
 
 // data cleanup: relative times, prices, currencies, tracking parameters — and the page copy must agree with lib
@@ -296,7 +296,7 @@ const NOW = Date.UTC(2026, 9, 23, 3, 0, 0); // 2026-10-23 12:00:00 KST
 const REL = [
   ['5시간 전', '2026-10-23 07:00:00'], ['3 hours ago', '2026-10-23 09:00:00'], ['5h', '2026-10-23 07:00:00'], ['30분 전', '2026-10-23 11:30:00'],
   ['an hour ago', '2026-10-23 11:00:00'], ['2일 전', '2026-10-21 12:00:00'], ['방금', '2026-10-23 12:00:00'], ['3時間前', '2026-10-23 09:00:00'],
-  ['2天前', '2026-10-21 12:00:00'], ['어제', '2026-10-22'], ['yesterday', '2026-10-22'], ['5 minutes', '5 minutes'], ['오늘 저녁', '오늘 저녁'],
+  ['2天前', '2026-10-21 12:00:00'], ['Fri Oct 23 04:54:24 +0000 2026', '2026-10-23 13:54:24'], ['어제', '2026-10-22'], ['yesterday', '2026-10-22'], ['5 minutes', '5 minutes'], ['오늘 저녁', '오늘 저녁'],
 ];
 const PRICES = [
   ['£51.77', 51.77], ['$1,234.56', 1234.56], ['1.234,56 €', 1234.56], ['39,000원', 39000], ['₩1,500,000', 1500000], ['3억 5,000만원', 350000000],
@@ -334,6 +334,21 @@ const URLS = [
   let typo = '';
   try { validateRecipe({ version: 1, name: 't', strategy: 'dom', pages: { type: 'single', start: 'https://a.test/' }, items: { container: 'li' }, fields: { p: { selector: '.p', transform: 'prise' } } }); } catch (e) { typo = e.message; }
   ok('validate: a misspelled transform is refused', /transform.*must be one of/.test(typo), typo);
+}
+
+// path lists: the first path that gives a value wins (X long posts: note_tweet text, short posts: legacy.full_text)
+{
+  const R = 'content.itemContent.tweet_results.result.';
+  const long = { content: { itemContent: { tweet_results: { result: { rest_id: '1', legacy: { full_text: 'cut at 280…' }, note_tweet: { note_tweet_results: { result: { text: 'the whole long post' } } } } } } } };
+  const short = { content: { itemContent: { tweet_results: { result: { rest_id: '2', legacy: { full_text: 'short post' } } } } } };
+  const wrapped = { content: { itemContent: { tweet_results: { result: { __typename: 'TweetWithVisibilityResults', tweet: { rest_id: '3', legacy: { full_text: 'wrapped post' } } } } } } };
+  const body = { path: [R + 'note_tweet.note_tweet_results.result.text', R + 'legacy.full_text', R + 'tweet.legacy.full_text'] };
+  const id = { path: [R + 'rest_id', R + 'tweet.rest_id'] };
+  ok('path list: long, short and wrapped posts each get their text and id', eq([long, short, wrapped].map((e) => [jsonField(e, id), jsonField(e, body)]), [['1', 'the whole long post'], ['2', 'short post'], ['3', 'wrapped post']]));
+  ok('path list: nothing found is empty, a single string still works', jsonField({}, { path: ['a', 'b'] }) === null && jsonField({ a: 1 }, 'a') === 1 && jsonField({ a: { b: '' }, c: 'x' }, { path: ['a.b', 'c'] }) === 'x');
+  const why = (r) => { try { validateRecipe(r); return ''; } catch (e) { return e.message; } };
+  const base = { version: 1, name: 't', pages: { type: 'urls', urls: ['https://a.test/'] } };
+  ok('validate: path lists allowed on JSON, refused on dom and when not strings', why({ ...base, strategy: 'http', fields: { b: body } }) === '' && /only works with http/.test(why({ ...base, strategy: 'dom', items: { container: 'li' }, fields: { b: { selector: ['a', 'b'] } } })) && /path strings/.test(why({ ...base, strategy: 'http', fields: { b: { path: [] } } })));
 }
 
 // xlsx: a real zip with bold frozen header, filters, numbers as numbers, escaped text
@@ -745,6 +760,8 @@ if (!offline) {
     ['local-intercept-cursor', local(FEED), [], 20, (s) => s.rows === 20 && s.intercepted === 4 && s.stopped_reason === 'cursor_end'],
     // virtualized feed: the DOM never holds more than 15 posts, yet all 50 are harvested round by round, in order
     ['local-recycle-scroll', local(RECYCLE), [], 50, (s) => s.rows === 50 && s.stopped_reason === 'scroll_idle' && s.sample[0].id === '1' && s.fill_rate.link === 1],
+    // --dry-run checks the mapping with one scroll round instead of running the whole feed
+    ['local-recycle-dry', local({ ...RECYCLE, name: 'local-recycle-dry' }), ['--dry-run'], 20, (s) => s.rows === 20 && s.pages_done === 1 && s.stopped_reason === 'dry_run'],
     // same feed, --limit 25: stops scrolling once 25 rows are in hand instead of running to the end
     ['local-recycle-limit', local({ ...RECYCLE, name: 'local-recycle-limit' }), ['--limit', '25'], 25, (s) => s.rows === 25 && s.stopped_reason === 'limit' && s.pages_done < 5],
     // a full page that merely ships a hidden reCAPTCHA (login form) is not a block

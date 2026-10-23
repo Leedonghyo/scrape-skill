@@ -137,7 +137,7 @@ npm run test:offline  # 네트워크·브라우저 없이 단위 테스트만
 node selftest.mjs --serve   # 로컬 테스트 서버만 띄우기 (examples/local-*.json을 직접 돌려볼 때)
 ```
 
-경로 문법(점이 든 키의 `["a.b"]` 포함), 필드 변환(map·regex·count·price·currency·clean_url·상대 시각), xlsx 생성, 값 종류 판정, 수집 후 마무리(template·absolute·require), 날짜 변환, 문자열 JSON·[*]·lookup, JSON 행, 내장 JSON 4종, 차단 감지, 쿠키, CSV, 레시피 검증, 커서 종료 판정, HAR 순위·base64·비밀 값 미출력, 요청 헤더 출처 분류를 단위 테스트합니다(158개). 라이브 테스트는 예제 레시피 5종(dom·http·embedded·상세페이지·무한스크롤)을 샌드박스 사이트에서, intercept(HTTP·WebSocket·SSE)·커서·다음 URL·항목별 JSON 상세(공식 API형)·세션 복원·이어하기·지난 글을 지우는 무한 스크롤·캡차 벽 판정·xlsx 저장과 이어하기·사이트 개편 후 자가 수리(필드 이동, 묶음 이름 변경, 정말 사라진 필드)를 selftest가 띄우는 로컬 서버(`node:http`)에서 끝까지 돌려 행 수와 종료 사유를 확인합니다. 총 195개.
+경로 문법(점이 든 키의 `["a.b"]` 포함), 필드 변환(map·regex·count·price·currency·clean_url·상대 시각), xlsx 생성, 값 종류 판정, 수집 후 마무리(template·absolute·require), 날짜 변환, 문자열 JSON·[*]·lookup, JSON 행, 내장 JSON 4종, 차단 감지, 쿠키, CSV, 레시피 검증, 커서 종료 판정, HAR 순위·base64·비밀 값 미출력, 요청 헤더 출처 분류를 단위 테스트합니다(161개). 라이브 테스트는 예제 레시피 5종(dom·http·embedded·상세페이지·무한스크롤)을 샌드박스 사이트에서, intercept(HTTP·WebSocket·SSE)·커서·다음 URL·항목별 JSON 상세(공식 API형)·세션 복원·이어하기·지난 글을 지우는 무한 스크롤·캡차 벽 판정·xlsx 저장과 이어하기·사이트 개편 후 자가 수리(필드 이동, 묶음 이름 변경, 정말 사라진 필드)를 selftest가 띄우는 로컬 서버(`node:http`)에서 끝까지 돌려 행 수와 종료 사유를 확인합니다. 총 199개.
 
 ## 한계와 다음 단계
 

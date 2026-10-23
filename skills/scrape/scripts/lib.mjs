@@ -110,6 +110,12 @@ export function validateRecipe(r) {
   }
   if (!r.fields || typeof r.fields !== 'object') fail('"fields" is required');
   // A misspelled transform ("prise") would otherwise be ignored silently and leave the raw text in the column.
+  const fieldSets = [[r.fields, r.strategy], [r.detail?.fields || {}, r.detail?.strategy || 'dom']];
+  for (const [set, strategy] of fieldSets) for (const [name, f] of Object.entries(set)) {
+    const fp = f && typeof f === 'object' ? f.path ?? f.selector : null;
+    if (Array.isArray(fp) && (!fp.length || !fp.every((x) => typeof x === 'string'))) fail(`field "${name}": a "path" list must hold one or more path strings`);
+    if (Array.isArray(fp) && strategy === 'dom') fail(`field "${name}": a list of paths only works with http, embedded or intercept (dom selectors can use "a, b")`);
+  }
   for (const [name, f] of [...Object.entries(r.fields), ...Object.entries(r.detail?.fields || {})]) {
     if (f && typeof f === 'object' && f.transform != null && !TRANSFORMS.includes(f.transform)) fail(`field "${name}": "transform" must be one of ${TRANSFORMS.join(', ')}`);
   }
@@ -412,8 +418,9 @@ export function toLocalTime(v, tz = 'Asia/Seoul', now = Date.now()) {
       if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
       d = new Date(str);
       if (Number.isNaN(d.getTime())) return v;
-      // No zone in the text: it is a wall-clock time already, so keep its fields instead of shifting it.
-      if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) {
+      // No zone in the text: it is a wall-clock time already, so keep its fields instead of shifting it. A zone in
+      // the middle counts too: X writes "Fri Oct 23 04:54:24 +0000 2026", with the year after the offset.
+      if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str) && !/\s[+-]\d{4}\s|\b(?:GMT|UTC)\b/i.test(str)) {
         const z = (n) => String(n).padStart(2, '0');
         return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
       }
@@ -448,7 +455,11 @@ export function jsonField(row, raw, doc) {
     base = lookupBase(row, spec.lookup, doc ?? row);
     if (base === undefined) return spec.transform === 'count' ? 0 : null;
   }
-  let v = getPath(base, spec.path ?? spec.selector ?? '');
+  // path: ["a.b", "c.d"] — the first path that gives a value wins (X keeps a long post's full text in note_tweet
+  // and a short one only in legacy.full_text; a wrapped post sits one level deeper).
+  const paths = [spec.path ?? spec.selector ?? ''].flat();
+  let v;
+  for (const p of paths) { v = getPath(base, p); if (!isEmpty(v)) break; }
   if (v === undefined) v = null;
   // transform: "count" — how many, not which: array length (a missing value counts 0, a single value 1)
   if (spec.transform === 'count') return Array.isArray(v) ? v.length : v == null ? 0 : 1;

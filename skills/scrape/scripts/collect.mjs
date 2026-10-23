@@ -276,6 +276,9 @@ class Collector {
     // pages.type cursor: the first load is page 1, every round after it one more; the run ends when a response's cursor does.
     const cursorPath = this.pages.type === 'cursor' ? this.pages.cursor_path : null;
     const first = cursorPath ? 1 : 0;
+    // --dry-run (and --repair) checks the mapping, it does not collect: one scroll round shows the list grows and
+    // what a second batch looks like. Scrolling every round there sent X eleven requests from a logged-in account.
+    if (this.dry) maxRounds = Math.min(maxRounds, first + 1);
     let cursor = '';
     let ended = false;
     const take = async (waitFirst) => {

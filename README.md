@@ -121,7 +121,7 @@ npm test              # offline unit tests + live runs of the example recipes (s
 npm run test:offline  # unit tests only
 ```
 
-195 tests in total: 158 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, self-repair after a redesign (moved fields, renamed container, a field that is really gone), feeds that drop old posts, captcha walls vs. harmless widgets).
+199 tests in total: 161 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, self-repair after a redesign (moved fields, renamed container, a field that is really gone), feeds that drop old posts, captcha walls vs. harmless widgets).
 
 ## Limits and what's next
 

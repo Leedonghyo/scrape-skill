@@ -268,7 +268,7 @@
         if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
         d = new Date(str);
         if (Number.isNaN(d.getTime())) return v;
-        if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+        if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str) && !/\s[+-]\d{4}\s|\b(?:GMT|UTC)\b/i.test(str)) return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
       }
     }
     if (Number.isNaN(d.getTime())) return v;
