@@ -121,7 +121,7 @@ npm run test:offline  # unit tests only
 
 ## Limits and what's next
 
-This is v0.6, aimed first at shop listings, news and blog lists, and job boards.
+This is v0.7, aimed first at shop listings, news and blog lists, and job boards.
 
 - Works: infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files, xlsx output, price/currency/relative-time/tracking-link cleanup
 - Not yet: shadow DOM, content inside iframes, non-Protobuf binary formats (MessagePack, CBOR)
