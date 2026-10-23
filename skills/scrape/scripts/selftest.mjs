@@ -24,7 +24,7 @@ import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import {
   getPath, jsonField, jsonRows, finishRows, detectBlockedHttp, extractEmbedded,
-  csvCell, cookieHeader, loadStorageState, HELPERS_PATH, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, nextUrl, noiseRegex, decodeProtobuf, decodeBinaryFrame, messageMatches, UsageError,
+  csvCell, cookieHeader, loadStorageState, HELPERS_PATH, toLocalTime, toPrice, toCurrency, cleanUrl, xlsxBuffer, unionColumns, fillRate, parseArgs, validateRecipe, cursorUrl, fillBody, nextCursor, nextUrl, noiseRegex, decodeProtobuf, decodeBinaryFrame, messageMatches, UsageError,
 } from './lib.mjs';
 import { objectArrays } from './har-scan.mjs';
 
@@ -111,7 +111,7 @@ function fixtureServer(port = 0) {
 </script></body></html>`);
     // A thin page whose content IS the captcha (Reddit's headless answer) vs. a full list that merely ships a widget.
     if (u.pathname === '/wall') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Reddit - Prove your humanity</title></head><body><h1>Prove your humanity</h1><p>Complete the challenge below and let us know you're a real person.</p><div class="g-recaptcha" data-sitekey="x"></div></body></html>`);
-    if (u.pathname === '/widget') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture widget</title></head><body><ul>${PRODUCTS.map((p) => `<li class="product"><b>${p.title}</b> — a long enough description so the page reads as real content, not a wall: size, colour, material, care notes and shipping.</li>`).join('')}</ul><form id="login" hidden><div class="g-recaptcha" data-sitekey="x"></div></form></body></html>`);
+    if (u.pathname === '/widget') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture widget</title></head><body><ul>${PRODUCTS.map((p) => `<li class="product"><b>${p.title}</b> <span class="price">₩${p.price}</span> <a href="/item/${p.id}?utm_source=feed&ref=${p.id}">link</a> — a long enough description so the page reads as real content, not a wall: size, colour, material, care notes and shipping.</li>`).join('')}</ul><form id="login" hidden><div class="g-recaptcha" data-sitekey="x"></div></form></body></html>`);
     if (u.pathname === '/api/private') {
       if (req.headers.authorization !== `Bearer ${FIXTURE_TOKEN}`) return json(res, 401, { error: 'sign in' });
       return json(res, 200, { data: { items: PRODUCTS.slice(0, 5) } });
@@ -270,10 +270,73 @@ ok('getPath missing', getPath({ a: 1 }, 'a.z.y') === undefined);
   ok('date: RFC 1123 GMT (RSS) → KST', d('Wed, 21 Oct 2026 06:00:00 GMT') === '2026-10-21 15:00:00');
   ok('date: tz override', d(1792568031775, 'UTC') === '2026-10-21 07:33:51');
   ok('date: zone-less text keeps its wall clock', d('2026-10-21 13:52:42') === '2026-10-21 13:52:42' && d('2026-10-21T09:05') === '2026-10-21 09:05:00' && d('2026-10-21') === '2026-10-21');
-  ok('date: not a date passes through', d('어제') === '어제' && d(null) === null);
+  ok('date: not a date passes through', d('미정') === '미정' && d(null) === null);
   // the same text must give the same answer on a machine in another zone
   const other = spawnSync(process.execPath, ['-e', `import('./lib.mjs').then((L) => console.log([L.toLocalTime('2026. 10. 21. 15:10'), L.toLocalTime('2026-10-22T01:00:00.000Z')].join('|')))`], { cwd: DIR, env: { ...process.env, TZ: 'America/New_York' }, encoding: 'utf8' });
   ok('date: independent of the machine time zone', other.stdout.trim() === '2026-10-21 15:10:00|2026-10-22 10:00:00', other.stdout.trim() || other.stderr);
+}
+
+// data cleanup: relative times, prices, currencies, tracking parameters — and the page copy must agree with lib
+const NOW = Date.UTC(2026, 9, 23, 3, 0, 0); // 2026-10-23 12:00:00 KST
+const REL = [
+  ['5시간 전', '2026-10-23 07:00:00'], ['3 hours ago', '2026-10-23 09:00:00'], ['5h', '2026-10-23 07:00:00'], ['30분 전', '2026-10-23 11:30:00'],
+  ['an hour ago', '2026-10-23 11:00:00'], ['2일 전', '2026-10-21 12:00:00'], ['방금', '2026-10-23 12:00:00'], ['3時間前', '2026-10-23 09:00:00'],
+  ['2天前', '2026-10-21 12:00:00'], ['어제', '2026-10-22'], ['yesterday', '2026-10-22'], ['5 minutes', '5 minutes'], ['오늘 저녁', '오늘 저녁'],
+];
+const PRICES = [
+  ['£51.77', 51.77], ['$1,234.56', 1234.56], ['1.234,56 €', 1234.56], ['39,000원', 39000], ['₩1,500,000', 1500000], ['3억 5,000만원', 350000000],
+  ['12만원', 120000], ['1 234,50 €', 1234.5], ['5,5', 5.5], ['무료', 0], ['Free', 0], ['-$5.00', -5], ['가격 문의', null], [12, 12],
+];
+const CURRENCIES = [
+  ['£51.77', 'GBP'], ['$1', 'USD'], ['US$ 3', 'USD'], ['HK$12', 'HKD'], ['C$4', 'CAD'], ['39,000원', 'KRW'], ['₩10', 'KRW'], ['€3', 'EUR'],
+  ['1200円', 'JPY'], ['¥1200', 'JPY'], ['30元', 'CNY'], ['USD 12', 'USD'], ['eur 5', 'EUR'], ['R$ 10', 'BRL'], ['12', null],
+];
+const URLS = [
+  ['https://a.com/x?id=1&utm_source=chatgpt.com', 'https://a.com/x?id=1'], ['https://a.com/x?utm_source=a&utm_medium=b', 'https://a.com/x'],
+  ['/p?fbclid=1&q=2#c', '/p?q=2#c'], ['https://a.com/x?id=1', 'https://a.com/x?id=1'], ['https://n.com/a?gclid=z', 'https://n.com/a'],
+];
+{
+  const bad = (rows, f) => rows.filter(([i, want]) => f(i) !== want).map(([i, want]) => `${i} → ${JSON.stringify(f(i))} (want ${JSON.stringify(want)})`);
+  ok('date: relative times measured back from now (ko/en/ja/zh, short forms)', !bad(REL, (v) => toLocalTime(v, 'Asia/Seoul', NOW)).length, bad(REL, (v) => toLocalTime(v, 'Asia/Seoul', NOW)));
+  ok('date: "어제" is yesterday in the target zone, not in UTC', toLocalTime('어제', 'Asia/Seoul', Date.UTC(2026, 9, 22, 16, 0, 0)) === '2026-10-22');
+  ok('price: thousands vs decimal marks, 억/만, free, negative', !bad(PRICES, toPrice).length, bad(PRICES, toPrice));
+  ok('currency: codes, prefixed dollars, symbols, words', !bad(CURRENCIES, toCurrency).length, bad(CURRENCIES, toCurrency));
+  ok('clean_url: tracking parameters dropped, the rest kept', !bad(URLS, cleanUrl).length, bad(URLS, cleanUrl));
+  ok('number transform is unchanged (old recipes)', jsonField({ v: '1.234,56 €' }, { path: 'v', transform: 'number' }) === 1.23456);
+  ok('json fields: price/currency/clean_url transforms', eq([toPrice, toCurrency, cleanUrl].map((_, i) => jsonField({ v: ['£51.77', '£51.77', '/a?utm_source=x'][i] }, { path: 'v', transform: ['price', 'currency', 'clean_url'][i] })), [51.77, 'GBP', '/a']));
+  const g = { window: {}, location: { href: 'https://a.test/' }, document: { querySelectorAll: () => [] }, URL, URLSearchParams, Intl, console };
+  g.window = g;
+  vm.createContext(g);
+  vm.runInContext(fs.readFileSync(HELPERS_PATH, 'utf8'), g, { filename: 'helpers.js' });
+  const inPage = JSON.parse(vm.runInContext(`JSON.stringify({
+    rel: ${JSON.stringify(REL.map(([i]) => i))}.map((v) => window.__scrape.toLocalTime(v, 'Asia/Seoul', ${NOW})),
+    price: ${JSON.stringify(PRICES.map(([i]) => i))}.map((v) => window.__scrape.toPrice(v)),
+    cur: ${JSON.stringify(CURRENCIES.map(([i]) => i))}.map((v) => window.__scrape.toCurrency(v)),
+    url: ${JSON.stringify(URLS.map(([i]) => i))}.map((v) => window.__scrape.cleanUrl(v)) })`, g));
+  ok('page helpers give the same answers as lib (date, price, currency, clean_url)', eq(inPage, { rel: REL.map(([, w]) => w), price: PRICES.map(([, w]) => w), cur: CURRENCIES.map(([, w]) => w), url: URLS.map(([, w]) => w) }), inPage);
+  let typo = '';
+  try { validateRecipe({ version: 1, name: 't', strategy: 'dom', pages: { type: 'single', start: 'https://a.test/' }, items: { container: 'li' }, fields: { p: { selector: '.p', transform: 'prise' } } }); } catch (e) { typo = e.message; }
+  ok('validate: a misspelled transform is refused', /transform.*must be one of/.test(typo), typo);
+}
+
+// xlsx: a real zip with bold frozen header, filters, numbers as numbers, escaped text
+const readZip = (buf) => {
+  const out = {};
+  for (let at = 0; buf.readUInt32LE(at) === 0x04034b50;) {
+    const size = buf.readUInt32LE(at + 18), nameLen = buf.readUInt16LE(at + 26), extra = buf.readUInt16LE(at + 28);
+    const name = buf.slice(at + 30, at + 30 + nameLen).toString('utf8');
+    const body = buf.slice(at + 30 + nameLen + extra, at + 30 + nameLen + extra + size);
+    out[name] = (buf.readUInt16LE(at + 8) === 8 ? zlib.inflateRawSync(body) : body).toString('utf8');
+    at += 30 + nameLen + extra + size;
+  }
+  return out;
+};
+{
+  const z = readZip(xlsxBuffer([{ 제목: 'A & B <1>', 가격: 51.77, 태그: ['x', 'y'], 재고: true }, { 제목: '한글' }], ['제목', '가격', '태그', '재고'], 'books/toscrape'));
+  const sh = z['xl/worksheets/sheet1.xml'] || '';
+  ok('xlsx: all parts present', ['[Content_Types].xml', '_rels/.rels', 'xl/workbook.xml', 'xl/_rels/workbook.xml.rels', 'xl/styles.xml', 'xl/worksheets/sheet1.xml'].every((k) => k in z), Object.keys(z));
+  ok('xlsx: number cell, boolean cell, escaped and joined text', sh.includes('<c r="B2"><v>51.77</v></c>') && sh.includes('<c r="D2" t="b"><v>1</v></c>') && sh.includes('A &amp; B &lt;1&gt;') && sh.includes('x | y') && sh.includes('한글'));
+  ok('xlsx: bold frozen header with filters; sheet name cleaned', sh.includes('<c r="A1" t="inlineStr" s="1">') && sh.includes('state="frozen"') && sh.includes('<autoFilter ref="A1:D3"/>') && z['xl/workbook.xml'].includes('name="books toscrape"'));
 }
 
 // JSON inside a string, [*] over an object's values, lookup across tables of the same document
@@ -669,6 +732,9 @@ if (!offline) {
     ['local-recycle-limit', local({ ...RECYCLE, name: 'local-recycle-limit' }), ['--limit', '25'], 25, (s) => s.rows === 25 && s.stopped_reason === 'limit' && s.pages_done < 5],
     // a full page that merely ships a hidden reCAPTCHA (login form) is not a block
     ['local-captcha-widget', local({ version: 1, name: 'local-captcha-widget', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/widget` }, items: { container: 'li.product' }, fields: { title: 'b' } }), [], 15, (s) => s.rows === 15 && s.fill_rate.title === 1],
+    // the same page through the browser: price/currency/clean_url transforms on DOM fields, written as xlsx
+    ['local-cleanup-xlsx', local({ version: 1, name: 'local-cleanup-xlsx', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/widget` }, items: { container: 'li.product' }, fields: { title: 'b', price: { selector: '.price', transform: 'price' }, currency: { selector: '.price', transform: 'currency' }, link: { selector: 'a', attr: 'href', transform: 'clean_url' } } }), ['--out', path.join(tmp, 'cleanup.xlsx')], 15,
+      (s) => s.rows === 15 && s.sample[0].price === 1000 && s.sample[0].currency === 'KRW' && s.sample[0].link === `${fixture.origin}/item/1?ref=1` && /\.xlsx$/.test(s.output) && (readZip(fs.readFileSync(s.output))['xl/worksheets/sheet1.xml'] || '').includes('<v>15000</v>')],
     // ids → item/{id}.json: a template builds each item's API URL, detail.strategy http reads it, relative url made absolute
     ['local-detail-http', local({ version: 1, name: 'local-detail-http', source: `${FIXTURE_ORIGIN}/`, strategy: 'http', pages: { type: 'urls', urls: [`${FIXTURE_ORIGIN}/api/top`] }, items: { path: '[]' }, fields: { id: '$', api: { template: `${FIXTURE_ORIGIN}/api/item/{id}.json` }, hn: { template: 'https://news.ycombinator.com/item?id={id}' } }, detail: { strategy: 'http', url_field: 'api', fields: { title: 'title', score: 'score', link: { path: 'url', absolute: true } } }, rate: { delay_ms: 50, jitter_ms: 10 } }), [], 4,
       (s) => s.rows === 4 && s.sample[0].id === 3 && s.sample[0].title === 'Story 3' && s.sample[0].score === 30 && s.sample[0].link === `${fixture.origin}/out/3` && s.sample[0].hn === 'https://news.ycombinator.com/item?id=3' && s.fill_rate.title === 1 && s.fill_rate.score === 0.75],
@@ -705,6 +771,12 @@ if (!offline) {
   const resumed = fs.existsSync(rest.out) ? fs.readFileSync(rest.out, 'utf8').trim().split('\n').length - 1 : 0;
   ok('live cursor --resume: 10 rows, then the other 10 from the saved cursor', part.summary.rows === 10 && part.summary.stopped_reason === 'max_pages' && rest.summary.rows === 10 && rest.summary.rows_previous === 10 && rest.summary.stopped_reason === 'cursor_end' && resumed === 20,
     { first: part.summary.rows, firstStop: part.summary.stopped_reason, second: rest.summary.rows, secondStop: rest.summary.stopped_reason, csvRows: resumed });
+  // xlsx + --resume: the second run starts from the rows kept in ~/.scrape/state, so the workbook ends with all 20
+  const xfile = path.join(tmp, 'cursor.xlsx');
+  const xpart = await run(local('local-cursor'), ['--max-pages', '2', '--out', xfile]);
+  const xrest = await run(local('local-cursor'), ['--resume', '--out', xfile], { keepState: true });
+  const xrows = fs.existsSync(xfile) ? ((readZip(fs.readFileSync(xfile))['xl/worksheets/sheet1.xml'] || '').match(/<row /g) || []).length - 1 : 0;
+  ok('live xlsx --resume: 10 rows, then 10 more, one workbook of 20', xpart.summary.rows === 10 && xrest.summary.rows === 10 && xrest.summary.stopped_reason === 'cursor_end' && xrows === 20, { first: xpart.summary.rows, second: xrest.summary.rows, xlsxRows: xrows });
   fixture.server.close();
   // write-csv.mjs roundtrip with dedupe
   const rowsFile = path.join(tmp, 'rows.json');

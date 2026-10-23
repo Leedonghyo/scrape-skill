@@ -13,7 +13,8 @@ export const HELPERS_PATH = path.join(SCRIPTS_DIR, 'page', 'helpers.js');
 export const SCRAPE_HOME = path.join(os.homedir(), '.scrape');
 export const PAGE_TYPES = ['single', 'urls', 'param', 'next_link', 'scroll', 'cursor', 'next_url'];
 export const STRATEGIES = ['dom', 'http', 'embedded', 'intercept'];
-export const FORMATS = ['csv', 'json', 'jsonl'];
+export const FORMATS = ['csv', 'json', 'jsonl', 'xlsx'];
+export const TRANSFORMS = ['number', 'trim', 'count', 'date', 'price', 'currency', 'clean_url'];
 
 // Exit codes are part of the contract with the model that calls these scripts.
 export class UsageError extends Error { code = 1; }
@@ -108,6 +109,10 @@ export function validateRecipe(r) {
     if (!tmpl || !tmpl.includes('{n}')) fail(r.strategy === 'http' ? '"http.url_template" (or "pages.template") must contain {n}' : '"pages.template" must contain {n}');
   }
   if (!r.fields || typeof r.fields !== 'object') fail('"fields" is required');
+  // A misspelled transform ("prise") would otherwise be ignored silently and leave the raw text in the column.
+  for (const [name, f] of [...Object.entries(r.fields), ...Object.entries(r.detail?.fields || {})]) {
+    if (f && typeof f === 'object' && f.transform != null && !TRANSFORMS.includes(f.transform)) fail(`field "${name}": "transform" must be one of ${TRANSFORMS.join(', ')}`);
+  }
   if (r.strategy === 'http' && !(r.http?.url_template || p.template || p.urls || p.start)) fail('"http.url_template" is required for strategy http');
   if (r.strategy === 'embedded' && !r.embedded?.source) fail('"embedded.source" is required for strategy embedded');
   if (r.strategy === 'intercept') {
@@ -294,30 +299,128 @@ function walkPath(obj, segs) {
   return cur;
 }
 
+// transform: "price" — the amount in a price as a number, reading the number format instead of deleting every
+// non-digit (which turns "1.234,56 €" into 1.23456). The last of "," / "." is the decimal mark when both appear;
+// a lone "," followed by exactly three digits groups thousands ("39,000원"); a lone "." is a decimal point unless
+// it repeats ("1.234.567"). Korean 억/만/천 units add up ("3억 5,000만원" → 350000000). "무료"/"free" → 0.
+export const toPrice = (v) => {
+  if (v == null || v === '') return null;
+  if (typeof v === 'number') return v;
+  const s = String(v).trim();
+  if (/^(?:무료|free|gratis|kostenlos|無料|免费)$/i.test(s)) return 0;
+  const plain = (t) => {
+    let c = t.replace(/[\s  '’]/g, '');
+    const comma = c.lastIndexOf(','), dot = c.lastIndexOf('.');
+    if (comma >= 0 && dot >= 0) c = comma > dot ? c.replace(/\./g, '').replace(',', '.') : c.replace(/,/g, '');
+    else if (comma >= 0) c = (c.match(/,/g).length > 1 || /,\d{3}$/.test(c)) ? c.replace(/,/g, '') : c.replace(',', '.');
+    else if (dot >= 0 && c.match(/\./g).length > 1) c = c.replace(/\./g, '');
+    const n = parseFloat(c);
+    return Number.isNaN(n) ? null : n;
+  };
+  const neg = /^[-−]|^\(.*\)$/.test(s) ? -1 : 1;
+  if (/\d\s*[억만천]/.test(s)) {
+    let total = 0;
+    const re = /(\d[\d,.]*)\s*([억만천])?/g;
+    let m;
+    while ((m = re.exec(s))) total += (plain(m[1]) || 0) * ({ 억: 1e8, 만: 1e4, 천: 1e3 }[m[2]] || 1);
+    return neg * total;
+  }
+  const m = s.match(/\d(?:[\d.,'’\s  ]*\d)?/);
+  if (!m) return null;
+  const n = plain(m[0]);
+  return n == null ? null : neg * n;
+};
+// transform: "currency" — the ISO 4217 code a price is in, from a code ("USD 12"), a prefixed dollar ("C$",
+// "HK$"), a symbol or a word ("원", "円"). A bare "$" is USD and a bare "¥" JPY; null when nothing matches.
+const CURRENCY_RULES = [
+  [/\b(USD|EUR|GBP|KRW|JPY|CNY|HKD|TWD|AUD|CAD|NZD|SGD|CHF|INR|THB|VND|RUB|TRY|PLN|BRL|MXN|SEK|NOK|DKK|IDR|MYR|PHP|ZAR|AED|SAR|UAH)\b/i, null],
+  [/\bRMB\b|人民币|元/, 'CNY'], [/US\$/i, 'USD'], [/C\$|CA\$/i, 'CAD'], [/A\$|AU\$/i, 'AUD'], [/HK\$/i, 'HKD'],
+  [/NT\$/i, 'TWD'], [/S\$/i, 'SGD'], [/NZ\$/i, 'NZD'], [/R\$/, 'BRL'], [/zł/i, 'PLN'],
+  [/£/, 'GBP'], [/€/, 'EUR'], [/₩|원/, 'KRW'], [/円|¥|￥/, 'JPY'], [/₹/, 'INR'], [/₽/, 'RUB'], [/₫/, 'VND'],
+  [/฿/, 'THB'], [/₺/, 'TRY'], [/₴/, 'UAH'], [/\$/, 'USD'],
+];
+export const toCurrency = (v) => {
+  if (v == null || v === '') return null;
+  const s = String(v);
+  for (const [re, code] of CURRENCY_RULES) { const m = s.match(re); if (m) return code || m[1].toUpperCase(); }
+  return null;
+};
+// transform: "clean_url" — drop tracking parameters (utm_*, fbclid, gclid…) and keep everything else, so the same
+// page shared from two places dedupes to one link. A relative URL stays relative.
+const TRACKING_PARAM = /^(?:utm_[a-z_]+|fbclid|gclid|gbraid|wbraid|dclid|msclkid|yclid|twclid|mc_cid|mc_eid|igshid|igsh|_hsenc|_hsmi|mkt_tok|ref_src)$/i;
+export const cleanUrl = (v) => {
+  if (v == null || v === '') return null;
+  const s = String(v).trim();
+  let u;
+  try { u = new URL(s, 'http://relative.invalid'); } catch (e) { return v; }
+  const keep = [...u.searchParams].filter(([k]) => !TRACKING_PARAM.test(k));
+  if (keep.length === [...u.searchParams].length) return s;
+  u.search = new URLSearchParams(keep).toString();
+  const out = u.href;
+  return /^[a-z][a-z\d+.-]*:|^\/\//i.test(s) ? out : out.slice('http://relative.invalid'.length);
+};
+// Relative times ("5시간 전", "3 hours ago", "5h", "어제") for transform "date": a Date measured back from
+// `now`, or { daysAgo } when only the day is known. null when the text is not a relative time.
+const RELATIVE_UNITS = { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 };
+const relativeTime = (str, now) => {
+  const s = str.trim().toLowerCase();
+  if (/^(?:just now|now|방금(?: 전)?|조금 전|刚刚|たった今)$/.test(s)) return new Date(now);
+  const day = { 오늘: 0, today: 0, 今日: 0, 今天: 0, 어제: 1, yesterday: 1, 昨日: 1, 昨天: 1, 그저께: 2, 그제: 2, 'day before yesterday': 2, 一昨日: 2, 前天: 2 }[s];
+  if (day !== undefined) return { daysAgo: day };
+  const unit = (u) => {
+    if (/^(?:s|secs?|seconds?|초|秒)$/.test(u)) return 's';
+    if (/^(?:m|mins?|minutes?|분|分|分钟)$/.test(u)) return 'm';
+    if (/^(?:h|hrs?|hours?|시간|時間|小时)$/.test(u)) return 'h';
+    if (/^(?:d|days?|일|日|天)$/.test(u)) return 'd';
+    if (/^(?:w|wks?|weeks?|주|週間|周)$/.test(u)) return 'w';
+    if (/^(?:mo|mos|months?|개월|달|か月|ヶ月|个月)$/.test(u)) return 'mo';
+    if (/^(?:y|yrs?|years?|년|年)$/.test(u)) return 'y';
+    return null;
+  };
+  const m = s.match(/^(\d+|an?|one)\s*([a-z가-힣぀-ヿ一-鿿]+?)\s*(ago|전|前)?$/);
+  if (!m) return null;
+  const u = unit(m[2]);
+  // "5 minutes" with no "ago" is a duration, not a time; only the short feed forms (5m, 3h, 2d) stand alone.
+  if (!u || (!m[3] && !/^(?:s|m|h|d|w|mo|y)$/.test(m[2]))) return null;
+  const n = /^\d+$/.test(m[1]) ? Number(m[1]) : 1;
+  const d = new Date(now);
+  if (u === 'mo') d.setMonth(d.getMonth() - n);
+  else if (u === 'y') d.setFullYear(d.getFullYear() - n);
+  else d.setTime(d.getTime() - n * RELATIVE_UNITS[u]);
+  return d;
+};
+
 // transform: "date" — epoch numbers (seconds, milliseconds or microseconds) and ISO text with a zone become
-// "YYYY-MM-DD HH:mm:ss" in tz (default Asia/Seoul). Text without a zone is taken as already local and only
-// tidied; text that is not a date at all comes back unchanged rather than lost.
-export function toLocalTime(v, tz = 'Asia/Seoul') {
+// "YYYY-MM-DD HH:mm:ss" in tz (default Asia/Seoul). Relative text ("5시간 전", "3 hours ago", "5h") is measured
+// back from `now`, and "어제"/"yesterday" give the date only. Text without a zone is taken as already local and
+// only tidied; text that is not a date at all comes back unchanged rather than lost.
+export function toLocalTime(v, tz = 'Asia/Seoul', now = Date.now()) {
   if (v == null || v === '') return null;
   const str = String(v).trim();
+  const inTz = (d) => Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map((x) => [x.type, x.value]));
   let d;
   if (typeof v === 'number' || /^\d{9,}(\.\d+)?$/.test(str)) {
     let n = Number(v);
     if (n < 1e11) n *= 1000; else if (n > 1e14) n /= 1000;
     d = new Date(n);
   } else {
-    const local = str.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(:\d{2})?(?:\.\d+)?)?$/);
-    if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
-    d = new Date(str);
-    if (Number.isNaN(d.getTime())) return v;
-    // No zone in the text: it is a wall-clock time already, so keep its fields instead of shifting it.
-    if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) {
-      const z = (n) => String(n).padStart(2, '0');
-      return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+    const rel = relativeTime(str, now);
+    if (rel && rel.daysAgo !== undefined) { const p = inTz(new Date(now - rel.daysAgo * 864e5)); return `${p.year}-${p.month}-${p.day}`; }
+    if (rel) d = rel;
+    else {
+      const local = str.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(:\d{2})?(?:\.\d+)?)?$/);
+      if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
+      d = new Date(str);
+      if (Number.isNaN(d.getTime())) return v;
+      // No zone in the text: it is a wall-clock time already, so keep its fields instead of shifting it.
+      if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) {
+        const z = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+      }
     }
   }
   if (Number.isNaN(d.getTime())) return v;
-  const part = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map((x) => [x.type, x.value]));
+  const part = inTz(d);
   return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}:${part.second}`;
 }
 
@@ -361,6 +464,9 @@ export function jsonField(row, raw, doc) {
   }
   if (v != null && spec.transform === 'trim') v = String(v).replace(/\s+/g, ' ').trim();
   if (v != null && spec.transform === 'date') v = toLocalTime(v, spec.tz);
+  if (v != null && spec.transform === 'price') v = toPrice(v);
+  if (v != null && spec.transform === 'currency') v = toCurrency(v);
+  if (v != null && spec.transform === 'clean_url') v = cleanUrl(v);
   return v;
 }
 
@@ -688,8 +794,74 @@ export function csvCell(v) {
   return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
 }
 
+// ---------- xlsx (no dependency) ----------
+// A workbook is a zip of a few XML parts. One sheet: bold, frozen header row with filters; numbers and booleans
+// are real cells (sortable, summable), everything else is text written like the CSV (arrays joined with " | ").
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = (buf) => { let c = 0xffffffff; for (const b of buf) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+
+function zipFiles(files) {
+  const locals = [], centrals = [];
+  let offset = 0;
+  for (const [name, text] of files) {
+    const nameBuf = Buffer.from(name, 'utf8');
+    const data = Buffer.from(text, 'utf8');
+    const body = zlib.deflateRawSync(data);
+    const head = Buffer.alloc(30);
+    head.writeUInt32LE(0x04034b50, 0); head.writeUInt16LE(20, 4); head.writeUInt16LE(0x0800, 6); head.writeUInt16LE(8, 8);
+    head.writeUInt32LE(0, 10); head.writeUInt32LE(crc32(data), 14); head.writeUInt32LE(body.length, 18); head.writeUInt32LE(data.length, 22);
+    head.writeUInt16LE(nameBuf.length, 26); head.writeUInt16LE(0, 28);
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt16LE(0x0800, 8); central.writeUInt16LE(8, 10);
+    central.writeUInt32LE(0, 12); central.writeUInt32LE(crc32(data), 16); central.writeUInt32LE(body.length, 20); central.writeUInt32LE(data.length, 24);
+    central.writeUInt16LE(nameBuf.length, 28); central.writeUInt32LE(offset, 42);
+    locals.push(head, nameBuf, body);
+    centrals.push(central, nameBuf);
+    offset += head.length + nameBuf.length + body.length;
+  }
+  const dir = Buffer.concat(centrals);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(files.length, 8); end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(dir.length, 12); end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...locals, dir, end]);
+}
+
+const xmlText = (s) => String(s)
+  .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f￾￿]/g, '') // not allowed in XML at all
+  .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const colName = (i) => { let s = ''; for (i += 1; i > 0; i = Math.floor((i - 1) / 26)) s = String.fromCharCode(65 + ((i - 1) % 26)) + s; return s; };
+
+export function xlsxBuffer(rows, columns, sheetName = 'data') {
+  const cellText = (v) => {
+    if (Array.isArray(v)) return v.map((x) => (x != null && typeof x === 'object' ? JSON.stringify(x) : x == null ? '' : String(x))).join(' | ');
+    return typeof v === 'object' ? JSON.stringify(v) : String(v);
+  };
+  const cell = (v, ref, header) => {
+    if (v == null || v === '') return '';
+    if (typeof v === 'number' && Number.isFinite(v)) return `<c r="${ref}"><v>${v}</v></c>`;
+    if (typeof v === 'boolean') return `<c r="${ref}" t="b"><v>${v ? 1 : 0}</v></c>`;
+    const t = cellText(v).slice(0, 32767); // Excel's limit per cell
+    return `<c r="${ref}" t="inlineStr"${header ? ' s="1"' : ''}><is><t xml:space="preserve">${xmlText(t)}</t></is></c>`;
+  };
+  const widths = columns.map((c) => Math.min(60, Math.max(8, String(c).length * 2, ...rows.slice(0, 200).map((r) => (r[c] == null ? 0 : cellText(r[c]).length))) + 2));
+  const sheetRows = [`<row r="1">${columns.map((c, i) => cell(c, `${colName(i)}1`, true)).join('')}</row>`];
+  rows.forEach((r, n) => sheetRows.push(`<row r="${n + 2}">${columns.map((c, i) => cell(r[c], `${colName(i)}${n + 2}`)).join('')}</row>`));
+  const last = `${colName(Math.max(columns.length, 1) - 1)}${rows.length + 1}`;
+  const sheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><cols>${widths.map((w, i) => `<col min="${i + 1}" max="${i + 1}" width="${w}" customWidth="1"/>`).join('')}</cols><sheetData>${sheetRows.join('')}</sheetData>${columns.length ? `<autoFilter ref="A1:${last}"/>` : ''}</worksheet>`;
+  const name = xmlText(String(sheetName).replace(/[[\]:*?/\\]/g, ' ').trim().slice(0, 31) || 'data');
+  return zipFiles([
+    ['[Content_Types].xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>'],
+    ['_rels/.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>'],
+    ['xl/workbook.xml', `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${name}" sheetId="1" r:id="rId1"/></sheets>${columns.length ? `<definedNames><definedName name="_xlnm._FilterDatabase" localSheetId="0" hidden="1">'${name.replace(/'/g, "''")}'!$A$1:$${colName(columns.length - 1)}$${rows.length + 1}</definedName></definedNames>` : ''}</workbook>`],
+    ['xl/_rels/workbook.xml.rels', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'],
+    ['xl/styles.xml', '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>'],
+    ['xl/worksheets/sheet1.xml', sheet],
+  ]);
+}
+
 // Append-friendly writers. CSV gets a BOM so Excel detects UTF-8 (Korean, emoji) without an import wizard.
-export function writeRows({ file, format, rows, columns, append }) {
+export function writeRows({ file, format, rows, columns, append, sheet }) {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const exists = append && fs.existsSync(file) && fs.statSync(file).size > 0;
   if (format === 'csv') {
@@ -699,6 +871,8 @@ export function writeRows({ file, format, rows, columns, append }) {
   } else if (format === 'jsonl') {
     const body = rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : '');
     (exists ? fs.appendFileSync : fs.writeFileSync)(file, body);
+  } else if (format === 'xlsx') {
+    fs.writeFileSync(file, xlsxBuffer(rows, columns, sheet)); // like json: caller passes the full array
   } else {
     fs.writeFileSync(file, JSON.stringify(rows, null, 2) + '\n'); // json: caller passes the full array
   }

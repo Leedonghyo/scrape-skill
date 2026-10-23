@@ -21,7 +21,7 @@ import {
 } from './lib.mjs';
 
 const USAGE = `usage: node collect.mjs <recipe.json | recipe-name> [--max-pages N] [--limit N] [--dry-run] [--out PATH]
-          [--format csv|json|jsonl] [--headless|--headful] [--resume] [--wait-for-human] [--cdp PORT|URL] [--quiet]
+          [--format csv|json|jsonl|xlsx] [--headless|--headful] [--resume] [--wait-for-human] [--cdp PORT|URL] [--quiet]
 A bare name resolves to ~/.scrape/recipes/<name>.json.
 --cdp attaches to a Chrome you started with --remote-debugging-port (your real browser) instead of launching one;
       it is never closed on exit. For sites even that cannot pass, see the real-browser fallback in SKILL.md.`;
@@ -105,12 +105,18 @@ class Collector {
         this.seen = new Set(st.seen || []);
         this.previousRows = st.rows_written || 0;
         if (format === 'json' && fs.existsSync(file)) { try { this.previousJson = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { this.previousJson = []; } }
+        // xlsx is rewritten whole on every flush like json, but cannot be read back cheaply: its rows also go to a
+        // JSONL sidecar in ~/.scrape/state, which is what a resumed run starts from.
+        if (format === 'xlsx' && fs.existsSync(this.rowsFile())) this.previousJson = fs.readFileSync(this.rowsFile(), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
         this.log(`resuming at ${JSON.stringify(st.cursor)}; ${this.previousRows} rows already in ${file}`);
       } else this.log('nothing to resume (no unfinished state); starting fresh');
     }
     this.format = format;
     this.file = file;
+    if (format === 'xlsx' && !this.resumeFrom && !this.dry) fs.rmSync(this.rowsFile(), { force: true });
   }
+
+  rowsFile() { return path.join(SCRAPE_HOME, 'state', `${this.recipe.name}.rows.jsonl`); }
 
   flush() {
     if (this.dry) return;
@@ -119,6 +125,10 @@ class Collector {
     if (!this.columns) this.columns = unionColumns(this.recipe.fields, this.recipe.detail?.fields, fresh);
     const append = this.flushed > 0 || !!this.resumeFrom;
     if (this.format === 'json') writeRows({ file: this.file, format: 'json', rows: [...(this.previousJson || []), ...this.rows], columns: this.columns });
+    else if (this.format === 'xlsx') {
+      writeRows({ file: this.rowsFile(), format: 'jsonl', rows: fresh, columns: this.columns, append: true });
+      writeRows({ file: this.file, format: 'xlsx', rows: [...(this.previousJson || []), ...this.rows], columns: this.columns, sheet: this.recipe.name });
+    }
     else writeRows({ file: this.file, format: this.format, rows: fresh, columns: this.columns, append });
     this.flushed = this.rows.length;
   }

@@ -43,7 +43,7 @@ Keep recipes boring and explicit. A recipe the model can read back and explain i
 | `http` | `http` only | `{ "url_template": "...{n}...", "method": "GET", "headers": {...}, "body": null }`. `url_template` is where `{n}` goes; `pages` then only carries `type: "param"`, `start_n`, `max_pages`. With `pages.type: "cursor"` the placeholder is `{cursor}`. Both placeholders also work inside `body` (object or string) |
 | `intercept` | `intercept` only | `{ "url_match": "/api/search", "method": "GET", "timeout_ms": 10000, "settle_ms": 100 }`, or for live data `{ "url_match": "/ws/prices", "channel": "websocket", "listen_ms": 10000 }` (`channel`: `http` default, `websocket`, `sse`). Optional for any channel: `where` (keep only messages whose paths hold given values, e.g. `{ "_type": 2 }` or `{ "event_type": ["trade", "fill"] }`); for binary WebSockets `binary_records` (`{ "length_bytes": 4, "type_bytes": 1 }`). `url_match` is a regex tested against each response URL; `method` (optional) narrows it; only JSON content-types count. `timeout_ms` (default 10000) is how long each page gets to make the call; `settle_ms` (default 100) is the quiet time after the last matching call before the collector moves on — see "Intercept" |
 | `embedded` | `embedded` only | `{ "source": "next" \| "ldjson" \| "window:NAME" \| { "regex": "...", "flags": "" } }` — see "Embedded sources" |
-| `output` | no | `{ "format": "csv" \| "json" \| "jsonl", "path": "~/Downloads/{name}-{date}.csv", "dedupe_key": "url" }`. A `--out` path with `.json`/`.jsonl`/`.csv` sets the format by extension. `{date}` is the local calendar date (YYYYMMDD), not UTC |
+| `output` | no | `{ "format": "csv" \| "json" \| "jsonl" \| "xlsx", "path": "~/Downloads/{name}-{date}.csv", "dedupe_key": "url" }`. A `--out` path with `.json`/`.jsonl`/`.csv`/`.xlsx` sets the format by extension. `xlsx` is one sheet named after the recipe, with a bold frozen header and filters; numbers and booleans are real cells. It is rewritten whole on each page (like `json`); `--resume` continues from a copy of the rows in `~/.scrape/state/<name>.rows.jsonl`. `{date}` is the local calendar date (YYYYMMDD), not UTC |
 | `notes` | no | free text: why this strategy, what to watch for, decisions the user made (robots.txt etc.) |
 
 When the collector stops on a block or login it writes `blocked_by: { vendor, kind, url }` to `~/.scrape/state/<name>.json` and to the summary line, never into the recipe.
@@ -96,7 +96,7 @@ A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` fo
 | `path` | http/embedded/intercept | path inside the row object |
 | `regex` | both | applied to the string value; first capture group wins, else whole match |
 | `map` | both | `{ "One": 1, "Two": 2, … }` — replaces the value after `regex`; unknown values pass through. Star ratings in class names, status words, "Y"/"N" flags |
-| `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim`, `count`, `date` |
+| `transform` | both | `number` (strips everything but digits, `.`, `-`), `trim`, `count`, `date`, `price`, `currency`, `clean_url` — see "Cleaning values". A name not in this list is refused by the recipe check |
 | `tz` | both | with `transform: "date"`: the output zone, default `Asia/Seoul`. `date` turns epoch seconds/milliseconds/microseconds and ISO or RFC text that carries a zone (`Z`, `+09:00`, `GMT`) into `YYYY-MM-DD HH:mm:ss` in that zone. Text with no zone (`2026. 10. 21. 15:10`) is already a wall-clock time and is only tidied, never shifted; text that is not a date comes back unchanged |
 | `lookup` | http/embedded/intercept | `{ "in": "<path to another table in the same document>", "where": "<key in that table>", "equals": "<key in this row>" }` — joins a second table: the element of `in` (array or object values) whose `where` equals this row's `equals` (or, if `where` is an array, contains it); `path` is then read from that element. No match = empty |
 | `template` | both | `"https://n.news.naver.com/article/{언론사ID}/{기사ID}"` — a column built from the row's other columns (list or detail) after extraction; empty when any placeholder is empty. Takes no `selector`/`path` |
@@ -109,6 +109,19 @@ Values that are only visible as repeated icons (five `<svg>` stars for a 5-star 
 Include the item's URL as a column whenever there is one, even if the user did not ask: it is the natural `dedupe_key`, it lets the user open the item, and titles are rarely unique.
 
 Prefer selectors in this order: `data-testid`/`id` > semantic tag + meaningful class > tag path. Hashed classes (`css-1x2y3z`, `sc-bdVaJa`) break on the next deploy; the helper already avoids them.
+
+## Cleaning values
+
+Turn what the page shows into values a spreadsheet can sort and sum, inside the recipe so a re-run gives the same table:
+
+| transform | input → output | rule |
+|---|---|---|
+| `price` | `£51.77` → `51.77`, `1.234,56 €` → `1234.56`, `39,000원` → `39000`, `3억 5,000만원` → `350000000`, `무료` → `0` | When both `,` and `.` appear, the last one is the decimal mark. A lone `,` before exactly three digits groups thousands; a lone `.` is a decimal point unless it repeats (`1.234` stays 1.234). Korean 억/만/천 add up. No digits → empty |
+| `currency` | `£51.77` → `GBP`, `HK$12` → `HKD`, `39,000원` → `KRW`, `1200円` → `JPY` | 3-letter codes first, then prefixed dollars (`US$`, `C$`, `A$`, `HK$`, `NT$`, `S$`, `NZ$`, `R$`), then symbols and words. A bare `$` is USD, a bare `¥` JPY (`元` is CNY). Nothing found → empty |
+| `clean_url` | `…/x?id=1&utm_source=chatgpt.com` → `…/x?id=1` | Drops `utm_*`, `fbclid`, `gclid`, `gbraid`, `wbraid`, `dclid`, `msclkid`, `yclid`, `twclid`, `mc_cid`, `mc_eid`, `igshid`, `igsh`, `_hsenc`, `_hsmi`, `mkt_tok`, `ref_src`; keeps every other parameter and the `#fragment`. Relative URLs stay relative |
+| `date` (relative) | `5시간 전`, `3 hours ago`, `5h`, `30분 전`, `3時間前`, `2天前`, `방금` → that moment; `어제`/`yesterday` → date only | Measured back from the moment the row is extracted, in `tz`. Short forms (`5m`, `3h`, `2d`, `1w`, `2mo`, `1y`) stand alone; a long unit needs "ago"/"전"/"前" (`5 minutes` is a duration and stays as text). The text must be the whole value; cut it out with `regex` first if it sits inside other text |
+
+For a price, use two fields on the same element: `{ "selector": ".price", "transform": "price" }` and `{ "selector": ".price", "transform": "currency" }`. `number` keeps its old behavior, so existing recipes produce the same values.
 
 ## Finishing rows
 

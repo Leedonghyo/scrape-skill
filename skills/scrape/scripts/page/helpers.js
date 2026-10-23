@@ -156,26 +156,123 @@
   const itemSelector = (info) => listSelector(info.listEl, [...info.listEl.children].filter((c) => signature(c) === signature(info.itemEl)));
 
   // ---------- extraction (shared with scripts/collect.mjs) ----------
+  // transform: "price" — the amount in a price as a number, reading the number format instead of deleting every
+  // non-digit (which turns "1.234,56 €" into 1.23456). The last of "," / "." is the decimal mark when both appear;
+  // a lone "," followed by exactly three digits groups thousands ("39,000원"); a lone "." is a decimal point unless
+  // it repeats ("1.234.567"). Korean 억/만/천 units add up ("3억 5,000만원" → 350000000). "무료"/"free" → 0.
+  const toPrice = (v) => {
+    if (v == null || v === '') return null;
+    if (typeof v === 'number') return v;
+    const s = String(v).trim();
+    if (/^(?:무료|free|gratis|kostenlos|無料|免费)$/i.test(s)) return 0;
+    const plain = (t) => {
+      let c = t.replace(/[\s  '’]/g, '');
+      const comma = c.lastIndexOf(','), dot = c.lastIndexOf('.');
+      if (comma >= 0 && dot >= 0) c = comma > dot ? c.replace(/\./g, '').replace(',', '.') : c.replace(/,/g, '');
+      else if (comma >= 0) c = (c.match(/,/g).length > 1 || /,\d{3}$/.test(c)) ? c.replace(/,/g, '') : c.replace(',', '.');
+      else if (dot >= 0 && c.match(/\./g).length > 1) c = c.replace(/\./g, '');
+      const n = parseFloat(c);
+      return Number.isNaN(n) ? null : n;
+    };
+    const neg = /^[-−]|^\(.*\)$/.test(s) ? -1 : 1;
+    if (/\d\s*[억만천]/.test(s)) {
+      let total = 0;
+      const re = /(\d[\d,.]*)\s*([억만천])?/g;
+      let m;
+      while ((m = re.exec(s))) total += (plain(m[1]) || 0) * ({ 억: 1e8, 만: 1e4, 천: 1e3 }[m[2]] || 1);
+      return neg * total;
+    }
+    const m = s.match(/\d(?:[\d.,'’\s  ]*\d)?/);
+    if (!m) return null;
+    const n = plain(m[0]);
+    return n == null ? null : neg * n;
+  };
+  // transform: "currency" — the ISO 4217 code a price is in, from a code ("USD 12"), a prefixed dollar ("C$",
+  // "HK$"), a symbol or a word ("원", "円"). A bare "$" is USD and a bare "¥" JPY; null when nothing matches.
+  const CURRENCY_RULES = [
+    [/\b(USD|EUR|GBP|KRW|JPY|CNY|HKD|TWD|AUD|CAD|NZD|SGD|CHF|INR|THB|VND|RUB|TRY|PLN|BRL|MXN|SEK|NOK|DKK|IDR|MYR|PHP|ZAR|AED|SAR|UAH)\b/i, null],
+    [/\bRMB\b|人民币|元/, 'CNY'], [/US\$/i, 'USD'], [/C\$|CA\$/i, 'CAD'], [/A\$|AU\$/i, 'AUD'], [/HK\$/i, 'HKD'],
+    [/NT\$/i, 'TWD'], [/S\$/i, 'SGD'], [/NZ\$/i, 'NZD'], [/R\$/, 'BRL'], [/zł/i, 'PLN'],
+    [/£/, 'GBP'], [/€/, 'EUR'], [/₩|원/, 'KRW'], [/円|¥|￥/, 'JPY'], [/₹/, 'INR'], [/₽/, 'RUB'], [/₫/, 'VND'],
+    [/฿/, 'THB'], [/₺/, 'TRY'], [/₴/, 'UAH'], [/\$/, 'USD'],
+  ];
+  const toCurrency = (v) => {
+    if (v == null || v === '') return null;
+    const s = String(v);
+    for (const [re, code] of CURRENCY_RULES) { const m = s.match(re); if (m) return code || m[1].toUpperCase(); }
+    return null;
+  };
+  // transform: "clean_url" — drop tracking parameters (utm_*, fbclid, gclid…) and keep everything else, so the same
+  // page shared from two places dedupes to one link. A relative URL stays relative.
+  const TRACKING_PARAM = /^(?:utm_[a-z_]+|fbclid|gclid|gbraid|wbraid|dclid|msclkid|yclid|twclid|mc_cid|mc_eid|igshid|igsh|_hsenc|_hsmi|mkt_tok|ref_src)$/i;
+  const cleanUrl = (v) => {
+    if (v == null || v === '') return null;
+    const s = String(v).trim();
+    let u;
+    try { u = new URL(s, 'http://relative.invalid'); } catch (e) { return v; }
+    const keep = [...u.searchParams].filter(([k]) => !TRACKING_PARAM.test(k));
+    if (keep.length === [...u.searchParams].length) return s;
+    u.search = new URLSearchParams(keep).toString();
+    const out = u.href;
+    return /^[a-z][a-z\d+.-]*:|^\/\//i.test(s) ? out : out.slice('http://relative.invalid'.length);
+  };
+  // Relative times ("5시간 전", "3 hours ago", "5h", "어제") for transform "date": a Date measured back from
+  // `now`, or { daysAgo } when only the day is known. null when the text is not a relative time.
+  const RELATIVE_UNITS = { s: 1e3, m: 6e4, h: 36e5, d: 864e5, w: 6048e5 };
+  const relativeTime = (str, now) => {
+    const s = str.trim().toLowerCase();
+    if (/^(?:just now|now|방금(?: 전)?|조금 전|刚刚|たった今)$/.test(s)) return new Date(now);
+    const day = { 오늘: 0, today: 0, 今日: 0, 今天: 0, 어제: 1, yesterday: 1, 昨日: 1, 昨天: 1, 그저께: 2, 그제: 2, 'day before yesterday': 2, 一昨日: 2, 前天: 2 }[s];
+    if (day !== undefined) return { daysAgo: day };
+    const unit = (u) => {
+      if (/^(?:s|secs?|seconds?|초|秒)$/.test(u)) return 's';
+      if (/^(?:m|mins?|minutes?|분|分|分钟)$/.test(u)) return 'm';
+      if (/^(?:h|hrs?|hours?|시간|時間|小时)$/.test(u)) return 'h';
+      if (/^(?:d|days?|일|日|天)$/.test(u)) return 'd';
+      if (/^(?:w|wks?|weeks?|주|週間|周)$/.test(u)) return 'w';
+      if (/^(?:mo|mos|months?|개월|달|か月|ヶ月|个月)$/.test(u)) return 'mo';
+      if (/^(?:y|yrs?|years?|년|年)$/.test(u)) return 'y';
+      return null;
+    };
+    const m = s.match(/^(\d+|an?|one)\s*([a-z가-힣぀-ヿ一-鿿]+?)\s*(ago|전|前)?$/);
+    if (!m) return null;
+    const u = unit(m[2]);
+    // "5 minutes" with no "ago" is a duration, not a time; only the short feed forms (5m, 3h, 2d) stand alone.
+    if (!u || (!m[3] && !/^(?:s|m|h|d|w|mo|y)$/.test(m[2]))) return null;
+    const n = /^\d+$/.test(m[1]) ? Number(m[1]) : 1;
+    const d = new Date(now);
+    if (u === 'mo') d.setMonth(d.getMonth() - n);
+    else if (u === 'y') d.setFullYear(d.getFullYear() - n);
+    else d.setTime(d.getTime() - n * RELATIVE_UNITS[u]);
+    return d;
+  };
   // transform: "date" — same rule as toLocalTime in lib.mjs: epoch numbers and zoned ISO text → tz (default
-  // Asia/Seoul) "YYYY-MM-DD HH:mm:ss"; zone-less text keeps its wall-clock fields; non-dates come back unchanged.
-  const toLocalTime = (v, tz = 'Asia/Seoul') => {
+  // Asia/Seoul) "YYYY-MM-DD HH:mm:ss"; relative text ("5시간 전", "3 hours ago", "5h") is measured back from now
+  // and "어제"/"yesterday" give the date only; zone-less text keeps its wall-clock fields; non-dates come back unchanged.
+  const toLocalTime = (v, tz = 'Asia/Seoul', now = Date.now()) => {
     if (v == null || v === '') return null;
     const str = String(v).trim();
     const z = (n) => String(n).padStart(2, '0');
+    const inTz = (d) => Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map((x) => [x.type, x.value]));
     let d;
     if (typeof v === 'number' || /^\d{9,}(\.\d+)?$/.test(str)) {
       let n = Number(v);
       if (n < 1e11) n *= 1000; else if (n > 1e14) n /= 1000;
       d = new Date(n);
     } else {
-      const local = str.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(:\d{2})?(?:\.\d+)?)?$/);
-      if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
-      d = new Date(str);
-      if (Number.isNaN(d.getTime())) return v;
-      if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+      const rel = relativeTime(str, now);
+      if (rel && rel.daysAgo !== undefined) { const p = inTz(new Date(now - rel.daysAgo * 864e5)); return `${p.year}-${p.month}-${p.day}`; }
+      if (rel) d = rel;
+      else {
+        const local = str.match(/^(\d{4}-\d{2}-\d{2})(?:[T ](\d{2}:\d{2})(:\d{2})?(?:\.\d+)?)?$/);
+        if (local) return local[2] ? `${local[1]} ${local[2]}${local[3] || ':00'}` : local[1];
+        d = new Date(str);
+        if (Number.isNaN(d.getTime())) return v;
+        if (!/(Z|GMT|UTC|[+-]\d{2}:?\d{2})\s*$/i.test(str)) return `${d.getFullYear()}-${z(d.getMonth() + 1)}-${z(d.getDate())} ${z(d.getHours())}:${z(d.getMinutes())}:${z(d.getSeconds())}`;
+      }
     }
     if (Number.isNaN(d.getTime())) return v;
-    const part = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: tz, year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' }).formatToParts(d).map((x) => [x.type, x.value]));
+    const part = inTz(d);
     return `${part.year}-${part.month}-${part.day} ${part.hour}:${part.minute}:${part.second}`;
   };
   const value = (e, spec) => {
@@ -204,6 +301,9 @@
     }
     if (v != null && spec.transform === 'trim') v = norm(v);
     if (v != null && spec.transform === 'date') v = toLocalTime(v, spec.tz);
+    if (v != null && spec.transform === 'price') v = toPrice(v);
+    if (v != null && spec.transform === 'currency') v = toCurrency(v);
+    if (v != null && spec.transform === 'clean_url') v = cleanUrl(v);
     return v;
   };
   // Resolve a field selector inside a scope. ":scope" = the container itself.
@@ -223,7 +323,7 @@
     return qsa(s, sc === document ? document : sc);
   };
   S.resolve = resolve;
-  // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count'|'date', tz, absolute } | { template } }
+  // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count'|'date'|'price'|'currency'|'clean_url', tz, absolute } | { template } }
   // container: css for each item (one row per match). Omit for a single-row page.
   S.extract = (fields, container) => {
     const scopes = container ? qsa(container) : [document];
@@ -549,6 +649,9 @@
   };
   S.getPath = getPath;
   S.toLocalTime = toLocalTime;
+  S.toPrice = toPrice;
+  S.toCurrency = toCurrency;
+  S.cleanUrl = cleanUrl;
 
   // ---------- pagination / API hints / diagnosis ----------
   S.pagination = () => {

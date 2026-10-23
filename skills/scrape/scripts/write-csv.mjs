@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /*
- * write-csv.mjs — turn a JSON array of rows into a CSV/JSON/JSONL file.
+ * write-csv.mjs — turn a JSON array of rows into a CSV/JSON/JSONL/XLSX file.
  *
  * This is the end of the real-browser fallback (see SKILL.md "Protected sites"): when a site is
  * hard-blocked for the collector's own browser but loads in the user's real browser, rows are gathered
@@ -8,7 +8,7 @@
  * to a file and run this to get the same UTF-8-BOM CSV the collector would have produced.
  *
  * Usage:
- *   node write-csv.mjs <rows.json> [--out PATH] [--format csv|json|jsonl] [--name NAME] [--dedupe-key KEY] [--limit N] [--columns a,b,c]
+ *   node write-csv.mjs <rows.json> [--out PATH] [--format csv|json|jsonl|xlsx] [--name NAME] [--dedupe-key KEY] [--limit N] [--columns a,b,c]
  *   cat rows.json | node write-csv.mjs - [...]
  * --limit N keeps the first N rows after dedupe (a fallback run that scrolled past the requested count).
  * Default output: ~/Downloads/<name|scrape>-<YYYYMMDD>.csv
@@ -18,7 +18,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expandHome, FORMATS, localDate, parseArgs, writeRows, unionColumns, fillRate, UsageError } from './lib.mjs';
 
-const USAGE = 'usage: node write-csv.mjs <rows.json | -> [--out PATH] [--format csv|json|jsonl] [--name NAME] [--dedupe-key KEY] [--limit N] [--columns a,b,c]';
+const USAGE = 'usage: node write-csv.mjs <rows.json | -> [--out PATH] [--format csv|json|jsonl|xlsx] [--name NAME] [--dedupe-key KEY] [--limit N] [--columns a,b,c]';
 const SPEC = { out: 'string', format: 'string', name: 'string', 'dedupe-key': 'string', limit: 'number', columns: 'string', help: 'boolean' };
 
 function main() {
@@ -50,7 +50,7 @@ function main() {
   const columns = opts.columns ? opts.columns.split(',').map((s) => s.trim()).filter(Boolean) : unionColumns(rows);
   const name = opts.name || 'scrape';
   const date = localDate();
-  const ext = format === 'csv' ? 'csv' : format === 'jsonl' ? 'jsonl' : 'json';
+  const ext = format;
   let out = path.resolve(expandHome(opts.out || `~/Downloads/${name}-${date}.${ext}`));
   if (!opts.out && fs.existsSync(out)) {
     // collect.mjs writes <name>-<date>.<ext> into the same folder; never silently overwrite its file.
@@ -61,7 +61,7 @@ function main() {
     out = `${base}-${n}.${ext}`;
   }
 
-  try { writeRows({ file: out, format, rows, columns, append: false }); }
+  try { writeRows({ file: out, format, rows, columns, append: false, sheet: name }); }
   catch (e) { console.error(`[write-csv] cannot write ${out}: ${e.message}`); return 1; }
 
   console.error(`[write-csv] wrote ${rows.length} rows → ${out}`);

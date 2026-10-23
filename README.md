@@ -64,7 +64,7 @@ Just ask. Words like "collect", "scrape", "crawl", "grab" or "pull into a spread
 - "All the job postings on this page, as Excel"
 - "Run the books-toscrape recipe again"
 
-Results go to `~/Downloads/<name>-<date>.csv` (UTF-8 with BOM, so Excel opens it cleanly). Recipes live in `~/.scrape/recipes/`.
+Results go to `~/Downloads/<name>-<date>.csv` (UTF-8 with BOM, so Excel opens it cleanly), or `.xlsx` if you ask for an Excel file. Prices can come out as numbers with a separate currency column, relative times like "3 hours ago" as real timestamps, and links without tracking parameters. Recipes live in `~/.scrape/recipes/`.
 
 ## When a site pushes back
 
@@ -117,15 +117,15 @@ npm test              # offline unit tests + live runs of the example recipes (s
 npm run test:offline  # unit tests only
 ```
 
-174 tests in total: 145 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, feeds that drop old posts, captcha walls vs. harmless widgets).
+188 tests in total: 157 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, feeds that drop old posts, captcha walls vs. harmless widgets).
 
 ## Limits and what's next
 
 This is v0.6, aimed first at shop listings, news and blog lists, and job boards.
 
-- Works: infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files
+- Works: infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files, xlsx output, price/currency/relative-time/tracking-link cleanup
 - Not yet: shadow DOM, content inside iframes, non-Protobuf binary formats (MessagePack, CBOR)
-- Next: scheduled runs and change tracking, a login helper, tracking-parameter cleanup and relative-time conversion, xlsx output, an MCP wrapper for other LLMs
+- Next: scheduled runs and change tracking, a login helper, an MCP wrapper for other LLMs
 
 ## License
 

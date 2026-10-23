@@ -34,7 +34,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 ### 0. 요청 이해
 
-사용자의 문장에서 스스로 정리하세요: 필드(이름 + 값이 어떻게 생겼는지), 범위가 있으면 범위("전부", "처음 100개", "이번 달"), 출력 형식(기본 CSV. 엑셀 쓰는 사람은 CSV를 원함). 캐묻지 마세요. 빠진 세부는 샘플을 보여줄 때 해결됩니다.
+사용자의 문장에서 스스로 정리하세요: 필드(이름 + 값이 어떻게 생겼는지), 범위가 있으면 범위("전부", "처음 100개", "이번 달"), 출력 형식(기본 CSV. "엑셀 파일로", "xlsx"라고 하면 `output.format: "xlsx"`). 캐묻지 마세요. 빠진 세부는 샘플을 보여줄 때 해결됩니다.
 
 ### 1. 열고 분석
 
@@ -55,7 +55,8 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
    - `http`/`embedded`/`intercept`: JSON에서 배열(`items.path`)과 행별 경로를 찾습니다. API가 페이지 번호 대신 커서(`next_cursor`, `after`, `endCursor`)로 넘어가면 `pages.type: cursor`, 다음 페이지 주소를 통째로 주면(`links.next`, `next_page_url`) `pages.type: next_url`을 씁니다(`references/recipe.md`). `embeddedGet`과 네트워크 응답 본문이 그걸 보는 창입니다.
    - 항목 URL이 있으면 열로 넣으세요. 자연스러운 `dedupe_key`이고 사용자도 링크를 좋아합니다. URL이 통째로 없고 id만 있으면 `{ "template": "https://site/article/{언론사ID}/{기사ID}" }`로 다른 열에서 조립하고, 상대 주소(`/kr/buy-sell/…`)면 JSON 필드에 `absolute: true`를 붙입니다.
    - 데이터가 아닌 행(광고·배너·구분선)이 섞이면 그 행에만 비는 열을 `items.require: ["순위"]`에 넣어 거릅니다.
-   - 시각은 `transform: "date"`로 한국 시각 `YYYY-MM-DD HH:mm:ss`가 됩니다(밀리초·초 숫자, `Z`·`+09:00`이 붙은 ISO). JSON이 문자열로 한 번 더 감싸여 있어도(`pageProps.initialState`) 경로가 그대로 들어가고, id로 묶인 표는 `[*]`로 돌며, 다른 표의 값은 `lookup`으로 붙입니다(`references/recipe.md`).
+   - 시각은 `transform: "date"`로 한국 시각 `YYYY-MM-DD HH:mm:ss`가 됩니다(밀리초·초 숫자, `Z`·`+09:00`이 붙은 ISO, "5시간 전"·"3 hours ago"·"5h" 같은 상대 시각. "어제"는 날짜만). JSON이 문자열로 한 번 더 감싸여 있어도(`pageProps.initialState`) 경로가 그대로 들어가고, id로 묶인 표는 `[*]`로 돌며, 다른 표의 값은 `lookup`으로 붙입니다(`references/recipe.md`).
+   - 가격은 같은 자리에서 두 열로 받습니다: `transform: "price"`(숫자. `1.234,56 €`·`3억 5,000만원`도 읽음)와 `transform: "currency"`(`GBP`·`KRW`). 링크에 `utm_`·`fbclid` 같은 추적 파라미터가 붙어 있으면 `transform: "clean_url"`. 기존 `number`는 동작이 그대로라 예전 레시피 결과는 바뀌지 않습니다(`references/recipe.md`의 "Cleaning values").
    - **수집이 끝난 CSV를 손으로 고치지 마세요.** 링크 조립, 전체 주소화, 배너 빼기를 수집 후 스크립트로 하면 '레시피 다시 돌려줘' 때 사라집니다. 위 셋으로 레시피에 넣습니다(`references/recipe.md`의 "Finishing rows"). 레시피로 표현이 안 되는 정리가 남으면 보고에 그 사실을 적습니다.
    안정적인 셀렉터(`id`, `data-testid`, 의미 있는 class)를 위치 기반보다 우선하세요. 헬퍼는 이미 해시 class를 피합니다.
 7. 사용자에게 말하기 **전에** 두 번째 페이지(2페이지 또는 다른 항목의 상세 페이지)를 같은 매핑으로 확인하세요. 그래야 확인 메시지에 "1·2페이지에서 검증했다"고 적을 수 있습니다. 가장 흔한 실패는 첫 페이지에서만 맞는 매핑입니다.
@@ -64,7 +65,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 설명하지 말고 보여주세요:
 
-1. `extract(fields, container)` → 처음 5행을 사용자의 필드명으로 마크다운 표로. `fields` 형식: 문자열이면 셀렉터, 객체면 `{selector, attr, regex, map, transform, all, join}`(`transform`은 `number`·`trim`·`count`)(http/embedded 레시피에서는 `path`). `extract`·`highlight`는 DOM 전용이므로 `http`/`embedded`/`intercept` 전략에서는 미리보기·스크린샷용 DOM 셀렉터를 따로 하나 잡으세요. 레시피는 JSON 경로로, 확인은 DOM으로.
+1. `extract(fields, container)` → 처음 5행을 사용자의 필드명으로 마크다운 표로. `fields` 형식: 문자열이면 셀렉터, 객체면 `{selector, attr, regex, map, transform, all, join}`(`transform`은 `number`·`trim`·`count`·`date`·`price`·`currency`·`clean_url`)(http/embedded 레시피에서는 `path`). `extract`·`highlight`는 DOM 전용이므로 `http`/`embedded`/`intercept` 전략에서는 미리보기·스크린샷용 DOM 셀렉터를 따로 하나 잡으세요. 레시피는 JSON 경로로, 확인은 DOM으로.
 2. `highlight(fields, { container, limit: 4 })` → `browser_take_screenshot`(`filename`은 `.playwright-mcp/<이름>.png`처럼 상대 경로로. Playwright MCP의 작업 루트(보통 홈, 즉 `~/.playwright-mcp/`) 기준으로 저장되니 결과에 찍힌 경로를 확인해 쓰세요. 허용 루트 밖 경로는 "outside allowed roots"로 거부되니 저장 후 복사. "waiting for fonts"로 타임아웃이면 탭이 뒤에 있는 것이니 `browser_run_code_unsafe`로 `await page.bringToFront()` 후 다시) → 보여주기 → `clearHighlight()`. `browser_evaluate`·`browser_snapshot`의 `filename`도 같은 제한입니다.
 3. 질문 하나: "이게 원하시는 데이터가 맞나요? 빠진 게 있나요?" 사용자의 언어로. 규모 추정과 2페이지 검증 결과를 같은 메시지에 넣어 추가 턴이 없게 하세요.
 
@@ -154,7 +155,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 수집기:
 
 ```
-node <skill-dir>/scripts/collect.mjs <name|recipe.json> [--dry-run] [--max-pages N] [--limit N] [--out PATH] [--format csv|json|jsonl] [--headful] [--wait-for-human] [--cdp PORT|URL] [--resume]
+node <skill-dir>/scripts/collect.mjs <name|recipe.json> [--dry-run] [--max-pages N] [--limit N] [--out PATH] [--format csv|json|jsonl|xlsx] [--headful] [--wait-for-human] [--cdp PORT|URL] [--resume]
 ```
 종료 코드: 0 성공 · 1 레시피 오류 · 2 브라우저/환경 · 3 차단 또는 로그인 필요.
 
@@ -165,7 +166,7 @@ node <skill-dir>/scripts/har-scan.mjs <file.har> [--match "화면에 보이는 �
 
 실제 브라우저 폴백 저장기(`drain()` 뒤 — 행을 먼저 `.json` 파일로 저장):
 ```
-node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <key> [--limit N] [--out PATH] [--format csv|json|jsonl]
+node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <key> [--limit N] [--out PATH] [--format csv|json|jsonl|xlsx]
 ```
 
 파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.
