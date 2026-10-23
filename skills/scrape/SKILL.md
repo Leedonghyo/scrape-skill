@@ -58,6 +58,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
    - 시각은 `transform: "date"`로 한국 시각 `YYYY-MM-DD HH:mm:ss`가 됩니다(밀리초·초 숫자, `Z`·`+09:00`이 붙은 ISO, "5시간 전"·"3 hours ago"·"5h" 같은 상대 시각. "어제"는 날짜만). JSON이 문자열로 한 번 더 감싸여 있어도(`pageProps.initialState`) 경로가 그대로 들어가고, id로 묶인 표는 `[*]`로 돌며, 다른 표의 값은 `lookup`으로 붙입니다(`references/recipe.md`).
    - 가격은 같은 자리에서 두 열로 받습니다: `transform: "price"`(숫자. `1.234,56 €`·`3억 5,000만원`도 읽음)와 `transform: "currency"`(`GBP`·`KRW`). 링크에 `utm_`·`fbclid` 같은 추적 파라미터가 붙어 있으면 `transform: "clean_url"`. 기존 `number`는 동작이 그대로라 예전 레시피 결과는 바뀌지 않습니다(`references/recipe.md`의 "Cleaning values").
    - **수집이 끝난 CSV를 손으로 고치지 마세요.** 링크 조립, 전체 주소화, 배너 빼기를 수집 후 스크립트로 하면 '레시피 다시 돌려줘' 때 사라집니다. 위 셋으로 레시피에 넣습니다(`references/recipe.md`의 "Finishing rows"). 레시피로 표현이 안 되는 정리가 남으면 보고에 그 사실을 적습니다.
+   - 웹 컴포넌트로 만든 사이트(`overview().shadow_roots` > 0)도 같은 방식으로 됩니다. 헬퍼와 수집기가 열린 Shadow DOM 안까지 찾으니 셀렉터는 평소처럼 짧게 씁니다. 내용이 늦게 채워지니 레시피에 `wait: { selector, network_idle: true }`를 넣으세요. 닫힌(closed) Shadow DOM은 읽을 수 없으니 그때는 JSON 경로를 찾거나 사용자에게 말합니다(`references/strategies.md`).
    안정적인 셀렉터(`id`, `data-testid`, 의미 있는 class)를 위치 기반보다 우선하세요. 헬퍼는 이미 해시 class를 피합니다.
 7. 사용자에게 말하기 **전에** 두 번째 페이지(2페이지 또는 다른 항목의 상세 페이지)를 같은 매핑으로 확인하세요. 그래야 확인 메시지에 "1·2페이지에서 검증했다"고 적을 수 있습니다. 가장 흔한 실패는 첫 페이지에서만 맞는 매핑입니다.
 

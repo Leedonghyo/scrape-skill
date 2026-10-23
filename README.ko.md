@@ -137,18 +137,18 @@ npm run test:offline  # 네트워크·브라우저 없이 단위 테스트만
 node selftest.mjs --serve   # 로컬 테스트 서버만 띄우기 (examples/local-*.json을 직접 돌려볼 때)
 ```
 
-경로 문법(점이 든 키의 `["a.b"]` 포함), 필드 변환(map·regex·count·price·currency·clean_url·상대 시각), xlsx 생성, 값 종류 판정, 수집 후 마무리(template·absolute·require), 날짜 변환, 문자열 JSON·[*]·lookup, JSON 행, 내장 JSON 4종, 차단 감지, 쿠키, CSV, 레시피 검증, 커서 종료 판정, HAR 순위·base64·비밀 값 미출력, 요청 헤더 출처 분류를 단위 테스트합니다(161개). 라이브 테스트는 예제 레시피 5종(dom·http·embedded·상세페이지·무한스크롤)을 샌드박스 사이트에서, intercept(HTTP·WebSocket·SSE)·커서·다음 URL·항목별 JSON 상세(공식 API형)·세션 복원·이어하기·지난 글을 지우는 무한 스크롤·캡차 벽 판정·xlsx 저장과 이어하기·사이트 개편 후 자가 수리(필드 이동, 묶음 이름 변경, 정말 사라진 필드)를 selftest가 띄우는 로컬 서버(`node:http`)에서 끝까지 돌려 행 수와 종료 사유를 확인합니다. 총 199개.
+경로 문법(점이 든 키의 `["a.b"]` 포함), 필드 변환(map·regex·count·price·currency·clean_url·상대 시각), xlsx 생성, 값 종류 판정, 수집 후 마무리(template·absolute·require), 날짜 변환, 문자열 JSON·[*]·lookup, JSON 행, 내장 JSON 4종, 차단 감지, 쿠키, CSV, 레시피 검증, 커서 종료 판정, HAR 순위·base64·비밀 값 미출력, 요청 헤더 출처 분류를 단위 테스트합니다(161개). 라이브 테스트는 예제 레시피 5종(dom·http·embedded·상세페이지·무한스크롤)을 샌드박스 사이트에서, intercept(HTTP·WebSocket·SSE)·커서·다음 URL·항목별 JSON 상세(공식 API형)·세션 복원·이어하기·지난 글을 지우는 무한 스크롤·캡차 벽 판정·xlsx 저장과 이어하기·사이트 개편 후 자가 수리(필드 이동, 묶음 이름 변경, 정말 사라진 필드)·웹 컴포넌트(중첩 Shadow DOM, slot 글자, `>>>` 경로, 읽을 수 없는 닫힌 Shadow DOM)를 selftest가 띄우는 로컬 서버(`node:http`)에서 끝까지 돌려 행 수와 종료 사유를 확인합니다. 총 202개.
 
 ## 한계와 다음 단계
 
 v0.8입니다. 쇼핑몰 목록, 뉴스·블로그 목록, 채용 공고를 먼저 겨냥했습니다.
 
-- 되는 것: 사이트 개편 후 자가 수리(깨진 필드의 새 자리를 제안하고, 확인을 받은 뒤에만 적용), 무한 스크롤(레딧처럼 지난 글을 화면에서 지우는 피드 포함), 상세 페이지 추적, JSON 엔드포인트, 내장 데이터, 두 줄짜리 테이블, 실제 브라우저 폴백
+- 되는 것: 웹 컴포넌트로 만든 사이트(열린 Shadow DOM. 예: Polymer Shop 81개를 화면에서 그대로), 사이트 개편 후 자가 수리(깨진 필드의 새 자리를 제안하고, 확인을 받은 뒤에만 적용), 무한 스크롤(레딧처럼 지난 글을 화면에서 지우는 피드 포함), 상세 페이지 추적, JSON 엔드포인트, 내장 데이터, 두 줄짜리 테이블, 실제 브라우저 폴백
   - 지문 보호 API: 직접 호출하면 403이지만 브라우저에서는 열리는 API를, 페이지가 받은 응답 그대로 읽기(`intercept`). WebSocket·SSE로 오는 실시간 데이터도 같은 방식(`intercept.channel`). 거래소처럼 이진 메시지(압축 JSON, Protobuf)로 보내는 경우도 스키마 없이 읽음
   - 커서 기반 API와 GraphQL(`pages.type: cursor`, `{cursor}` 자리표시자, 이어하기), 응답이 주는 다음 페이지 주소 따라가기(`pages.type: next_url`)
   - HAR 파일로 API 찾기(`har-scan.mjs`), 사이트 코드 속 엔드포인트 후보(`apiCandidates`), 토큰·서명이 어디서 오는지 분류(`requestOrigins`), 소스맵 단서(`sourceMapHints`)
   - 엑셀 파일(xlsx) 출력, 가격·통화·상대 시각·추적 파라미터 정리
-- 아직 안 되는 것: shadow DOM, iframe 안의 내용, MessagePack·CBOR 등 Protobuf가 아닌 이진 형식
+- 아직 안 되는 것: 닫힌(closed) Shadow DOM, iframe 안의 내용, MessagePack·CBOR 등 Protobuf가 아닌 이진 형식
 - 다음 후보: 정기 실행과 변경 추적, 로그인 도우미, 다른 LLM용 MCP 래퍼
 
 ## 라이선스

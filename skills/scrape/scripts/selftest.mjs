@@ -113,6 +113,23 @@ function fixtureServer(port = 0) {
       const list = v === 3 ? `<section class="grid">${books.map(card).join('')}</section>` : `<ol class="row">${books.map((b) => `<li class="col">${card(b)}</li>`).join('')}</ol>`;
       return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture books v${v}</title></head><body><header><nav><a href="/">Home</a> <a href="/about">About us and our long history of selling books</a></nav></header><main><h1>All products</h1>${list}</main><footer>© Fixture books</footer></body></html>`);
     }
+    // Web components: the whole list lives in nested open shadow roots (like Polymer Shop), a badge is slotted
+    // light-DOM text, and one widget uses a closed shadow root that page scripts must not see into.
+    if (u.pathname === '/shadow') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture shadow</title></head><body><shop-app></shop-app><secret-box></secret-box><script>
+  const items = Array.from({ length: 9 }, (_, i) => ({ id: i + 1, title: 'Shadow item ' + (i + 1), price: (5 + i * 1.5).toFixed(2) }));
+  customElements.define('item-card', class extends HTMLElement {
+    connectedCallback() { const r = this.attachShadow({ mode: 'open' }); r.innerHTML = '<style>.title{font-weight:bold}</style><div class="title">' + this.dataset.title + '</div><span class="price">$' + this.dataset.price + '</span><span class="badge"><slot></slot></span>'; }
+  });
+  customElements.define('shop-list', class extends HTMLElement {
+    connectedCallback() { const r = this.attachShadow({ mode: 'open' }); r.innerHTML = '<ul class="grid">' + items.map((b) => '<li><a href="/item/' + b.id + '"><item-card data-title="' + b.title + '" data-price="' + b.price + '">' + (b.id % 2 ? 'NEW' : 'SALE') + '</item-card></a></li>').join('') + '</ul>'; }
+  });
+  customElements.define('shop-app', class extends HTMLElement {
+    connectedCallback() { const r = this.attachShadow({ mode: 'open' }); r.innerHTML = '<header><h1>Shadow shop</h1></header><main><shop-list></shop-list></main>'; }
+  });
+  customElements.define('secret-box', class extends HTMLElement {
+    connectedCallback() { const r = this.attachShadow({ mode: 'closed' }); r.innerHTML = '<ul>' + items.map((b) => '<li class="secret">' + b.title + '</li>').join('') + '</ul>'; }
+  });
+</script></body></html>`);
     // Virtualized feed (Reddit, X): 50 posts, 10 per load, but only the newest 15 stay in the DOM.
     if (u.pathname === '/recycle') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture recycle</title></head><body><ul id="list"></ul><script>
   let next = 1, busy = false;
@@ -764,6 +781,13 @@ if (!offline) {
     ['local-recycle-dry', local({ ...RECYCLE, name: 'local-recycle-dry' }), ['--dry-run'], 20, (s) => s.rows === 20 && s.pages_done === 1 && s.stopped_reason === 'dry_run'],
     // same feed, --limit 25: stops scrolling once 25 rows are in hand instead of running to the end
     ['local-recycle-limit', local({ ...RECYCLE, name: 'local-recycle-limit' }), ['--limit', '25'], 25, (s) => s.rows === 25 && s.stopped_reason === 'limit' && s.pages_done < 5],
+    // Shadow DOM: plain selectors reach into nested open shadow roots, rendered text includes slotted content
+    // (tags join without added spaces, exactly like textContent on an ordinary page),
+    // explicit "a >>> b" paths work, and a closed shadow root stays out of reach
+    ['local-shadow', local({ version: 1, name: 'local-shadow', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/shadow` }, wait: { selector: 'item-card' }, items: { container: 'ul.grid > li' }, fields: { title: 'div.title', price: { selector: 'span.price', transform: 'price' }, badge: 'span.badge', link: { selector: 'a', attr: 'href' }, card: 'item-card' } }), [], 9,
+      (s) => s.rows === 9 && s.sample[0].title === 'Shadow item 1' && s.sample[0].price === 5 && s.sample[0].badge === 'NEW' && s.sample[1].badge === 'SALE' && /\/item\/1$/.test(s.sample[0].link) && s.sample[0].card === 'Shadow item 1$5.00NEW' && Object.values(s.fill_rate).every((x) => x === 1)],
+    ['local-shadow-explicit', local({ version: 1, name: 'local-shadow-explicit', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/shadow` }, wait: { selector: 'item-card' }, items: { container: 'shop-app >>> shop-list >>> li' }, fields: { title: 'item-card >>> div.title' } }), [], 9, (s) => s.rows === 9 && s.sample[2].title === 'Shadow item 3'],
+    ['local-shadow-closed', local({ version: 1, name: 'local-shadow-closed', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/shadow` }, wait: { selector: 'item-card' }, items: { container: 'li.secret' }, fields: { t: ':scope' } }), [], 0, (s) => s.rows === 0 && s.stopped_reason === 'empty_page'],
     // a full page that merely ships a hidden reCAPTCHA (login form) is not a block
     ['local-captcha-widget', local({ version: 1, name: 'local-captcha-widget', strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/widget` }, items: { container: 'li.product' }, fields: { title: 'b' } }), [], 15, (s) => s.rows === 15 && s.fill_rate.title === 1],
     // the same page through the browser: price/currency/clean_url transforms on DOM fields, written as xlsx

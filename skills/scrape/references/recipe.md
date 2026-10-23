@@ -89,7 +89,7 @@ A string is shorthand: `{ "selector": "..." }` for `dom`, `{ "path": "..." }` fo
 
 | key | strategy | meaning |
 |---|---|---|
-| `selector` | dom | CSS, relative to the container. `":scope"` means the container itself. A leading `+ ` searches the container's *next sibling* instead (`"+ .score"`), `++ ` the one after — for two-row tables like Hacker News where title and score sit in consecutive `<tr>`s |
+| `selector` | dom | CSS, relative to the container. `":scope"` means the container itself. Selectors reach into open shadow roots when the normal page has no match, and `"a >>> b"` crosses one explicitly (see strategies.md, Shadow DOM). A leading `+ ` searches the container's *next sibling* instead (`"+ .score"`), `++ ` the one after — for two-row tables like Hacker News where title and score sit in consecutive `<tr>`s |
 | `attr` | dom | `text` (default), `html`, or an attribute name (`href`, `src`, `title`, `datetime`, `data-price`…). `href`/`src` are made absolute unless `absolute: false` |
 | `all` | dom | `true` → array of every match instead of the first (arrays are written as `a \| b \| c` in CSV) |
 | `join` | dom | with `all`: join the matches into one string, e.g. `"join": "\n\n"` for article paragraphs (`"[data-testid=body] p"`), which also skips ads and widgets that are not `<p>` |

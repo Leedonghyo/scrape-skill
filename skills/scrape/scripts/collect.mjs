@@ -693,7 +693,7 @@ class Collector {
   // every page of a param / next_link / urls list, so numbered pages and lazy loading combine.
   async scrollToLoad(page, s) {
     const container = s.container || this.recipe.items?.container || null;
-    const count = () => page.evaluate((c) => (c ? document.querySelectorAll(c).length : (document.scrollingElement || document.documentElement).scrollHeight), container);
+    const count = () => page.evaluate((c) => (c ? (window.__scrape ? window.__scrape.count(c) : document.querySelectorAll(c).length) : (document.scrollingElement || document.documentElement).scrollHeight), container);
     const max = s.max_rounds ?? 10;
     const idle = s.idle_ms ?? 1000;
     let last = await count();

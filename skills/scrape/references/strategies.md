@@ -149,7 +149,10 @@ List page gives title + URL; the user also wants description or specs → `detai
 ### iframes and shadow DOM
 
 - `overview().iframes` lists frame URLs. Selectors do not cross frames. If the data is inside one, navigate directly to the frame URL and treat it as the page.
-- `overview().shadow_roots > 0` and `probe` finds nothing: the content is in a shadow root. In the browser you can read it with `browser_snapshot` (Playwright pierces shadow DOM), but `extract` does not. Prefer `http`/`embedded`; otherwise tell the user this site needs a custom approach.
+- Shadow DOM (web components: Polymer, Lit, Reddit's shreddit, many design systems) is handled by the helpers and the collector. `overview().shadow_roots` counts the open shadow roots, nested ones included. When a selector finds nothing in the normal page and the page has shadow roots, it is tried inside every open shadow root below the scope. So `detectLists`, `findByText`, `probe`, `extract`, `highlight` and the collector work as usual, and selectors stay short (`li`, `div.title`). Text is read as it renders: a host's shadow content and `<slot>`ed children count, `<style>` does not. `"a >>> b"` names the boundary explicitly: `b` inside the shadow root of each `a` (`"shop-app >>> shop-list >>> li"`), useful when a short selector also matches elsewhere.
+- Web components often fill their shadow content after the element appears. Give such recipes `"wait": { "selector": "<item element>", "network_idle": true }`; without the network wait the first extract can see empty items (Polymer Shop: 0 items right after `shop-list-item` appears, all filled after the network went quiet).
+- Closed shadow roots (`mode: "closed"`) cannot be read by page scripts at all. Prefer the site's JSON (`http`/`intercept`) there, or tell the user.
+- Even when the page can be read, a JSON file or API behind it (Polymer Shop's `data/<category>.json`) is usually cheaper and exact; the strategy order in SKILL.md still applies.
 
 ### Interaction before the list
 

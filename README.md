@@ -121,14 +121,14 @@ npm test              # offline unit tests + live runs of the example recipes (s
 npm run test:offline  # unit tests only
 ```
 
-199 tests in total: 161 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, self-repair after a redesign (moved fields, renamed container, a field that is really gone), feeds that drop old posts, captcha walls vs. harmless widgets).
+202 tests in total: 161 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, self-repair after a redesign (moved fields, renamed container, a field that is really gone), web components (nested open shadow roots, slotted text, `>>>` paths, a closed root that stays unreadable), feeds that drop old posts, captcha walls vs. harmless widgets).
 
 ## Limits and what's next
 
 This is v0.8, aimed first at shop listings, news and blog lists, and job boards.
 
-- Works: self-repair when a site is redesigned (proposes new places for broken fields, applied only after you confirm), infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files, xlsx output, price/currency/relative-time/tracking-link cleanup
-- Not yet: shadow DOM, content inside iframes, non-Protobuf binary formats (MessagePack, CBOR)
+- Works: sites built with web components (open Shadow DOM, e.g. Polymer Shop: 81/81 products read from the page), self-repair when a site is redesigned (proposes new places for broken fields, applied only after you confirm), infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files, xlsx output, price/currency/relative-time/tracking-link cleanup
+- Not yet: closed shadow roots, content inside iframes, non-Protobuf binary formats (MessagePack, CBOR)
 - Next: scheduled runs and change tracking, a login helper, an MCP wrapper for other LLMs
 
 ## License

@@ -66,6 +66,10 @@
   const pathWithin = (el, root) => {
     root = root || document;
     if (el === root) return ':scope';
+    // An element inside a shadow root is addressed from its own root; queries fall back into shadow roots, so
+    // "div.title" relative to an item still finds the title inside the item's web component.
+    if (!(root === document ? document.contains(el) : root.contains(el))) root = el.getRootNode();
+    const isTop = root === document || root.nodeType === 11;
     const parts = [];
     const scope = root === document ? document : root;
     // Does [p, ...parts] pin exactly one element inside root? Tested as a descendant chain, which is the
@@ -73,7 +77,7 @@
     const unique = (p) => {
       try {
         const sel = [p, ...parts].join(' > ');
-        return scope.querySelectorAll(root === document ? sel : ':scope ' + sel).length === 1;
+        return scope.querySelectorAll(isTop ? sel : ':scope ' + sel).length === 1;
       } catch (e) {
         return false;
       }
@@ -107,26 +111,85 @@
     let sel = parts.join(' > ');
     // Inside a root: a chain that starts at a direct child keeps ">", one that stopped early at a semantic
     // ancestor is a descendant selector (":scope span.score").
-    if (root !== document && !sel.startsWith(':scope')) sel = (top && top.parentElement === root ? ':scope > ' : ':scope ') + sel;
+    if (!isTop && !sel.startsWith(':scope')) sel = (top && top.parentElement === root ? ':scope > ' : ':scope ') + sel;
     return sel;
   };
   const cssPath = (el) => pathWithin(el, document);
   const generalize = (sel) => sel.replace(/:nth-of-type\(\d+\)/g, '');
-  const qsa = (sel, scope) => {
+  const lightQsa = (sel, scope) => {
     try {
       return [...(scope || document).querySelectorAll(sel)];
     } catch (e) {
       return [];
     }
   };
+  // ---------- Shadow DOM ----------
+  // Web components (Polymer, Lit, Reddit's shreddit, many design systems) render inside shadow roots that CSS
+  // selectors cannot cross. A query runs in the light DOM first, exactly as before; only when that finds nothing
+  // on a page that has shadow roots does it also look inside every open shadow root below the scope. "a >>> b"
+  // says it explicitly: b inside the shadow root of each a. Closed shadow roots stay invisible to page scripts.
+  const shadowRootsUnder = (scope) => {
+    const out = [];
+    const visit = (root) => {
+      for (const e of root.querySelectorAll('*')) if (e.shadowRoot) { out.push(e.shadowRoot); visit(e.shadowRoot); }
+    };
+    if (scope.shadowRoot) { out.push(scope.shadowRoot); visit(scope.shadowRoot); }
+    visit(scope);
+    return out;
+  };
+  let shadowSeen = { at: 0, any: false };
+  const pageHasShadow = () => {
+    const now = Date.now();
+    if (now - shadowSeen.at > 1000) shadowSeen = { at: now, any: [...document.querySelectorAll('*')].some((e) => e.shadowRoot) };
+    return shadowSeen.any;
+  };
+  // Every element under scope, shadow roots included (list detection, text search, candidate fields).
+  const allUnder = (scope) => {
+    const els = [...scope.querySelectorAll('*')];
+    if (!pageHasShadow()) return els;
+    for (const r of shadowRootsUnder(scope)) els.push(...r.querySelectorAll('*'));
+    return els;
+  };
+  // Crossing out of a shadow root: the parent of a top-level shadow child is the element that hosts it.
+  const parentOf = (el) => el.parentElement || (el.parentNode && el.parentNode.nodeType === 11 ? el.parentNode.host : null);
+  const qsa = (sel, scope) => {
+    scope = scope || document;
+    if (sel.includes('>>>')) {
+      let cur = [scope];
+      sel.split('>>>').map((x) => x.trim()).forEach((part, i) => {
+        cur = cur.flatMap((n) => { const base = i === 0 ? n : n.shadowRoot; return base && part ? lightQsa(part, base) : []; });
+      });
+      return cur;
+    }
+    const found = lightQsa(sel, scope);
+    if (found.length || !pageHasShadow()) return found;
+    const seen = new Set();
+    const out = [];
+    for (const root of shadowRootsUnder(scope)) for (const e of lightQsa(sel, root)) if (!seen.has(e)) { seen.add(e); out.push(e); }
+    return out;
+  };
+  // Text as it renders: a host's shadow content (with slotted light children), without <style>/<script>.
+  const deepText = (node) => {
+    let s = '';
+    const walk = (n) => {
+      if (n.nodeType === 3) { s += n.nodeValue; return; }
+      if (n.nodeType === 1 && SKIP_TAGS.has(n.tagName)) return;
+      if (n.nodeType === 1 && n.shadowRoot) { walk(n.shadowRoot); return; }
+      if (n.nodeType === 1 && n.tagName === 'SLOT') { const a = n.assignedNodes({ flatten: true }); if (a.length) { a.forEach(walk); return; } }
+      for (const c of n.childNodes) walk(c);
+    };
+    walk(node);
+    return s;
+  };
+  const textOf = (el) => (pageHasShadow() && (el.shadowRoot || el.querySelector('slot') || [...el.querySelectorAll('*')].some((x) => x.shadowRoot)) ? deepText(el) : el.textContent);
 
   // Find the repeating "item" ancestor of el (a product card, a table row, a list entry).
   // Picks the ancestor with the most same-signature siblings (>=3); ties go to the deeper one.
   const itemAncestor = (el, min = 3) => {
     let best = null;
     let cur = el;
-    while (cur && cur.parentElement && cur !== document.body) {
-      const parent = cur.parentElement;
+    while (cur && parentOf(cur) && cur !== document.body) {
+      const parent = parentOf(cur);
       const sig = signature(cur);
       const count = [...parent.children].filter((c) => signature(c) === sig).length;
       if (count >= min && (!best || count > best.count)) best = { itemEl: cur, listEl: parent, count };
@@ -277,7 +340,7 @@
   };
   const value = (e, spec) => {
     let v;
-    if (!spec.attr || spec.attr === 'text') v = norm(e.textContent);
+    if (!spec.attr || spec.attr === 'text') v = norm(textOf(e));
     else if (spec.attr === 'html') v = e.innerHTML;
     else v = e.getAttribute(spec.attr);
     if (v == null) return null;
@@ -323,6 +386,7 @@
     return qsa(s, sc === document ? document : sc);
   };
   S.resolve = resolve;
+  S.count = (sel) => qsa(sel).length; // what the collector counts while scrolling, shadow roots included
   // fields: { name: 'css' | { selector, attr, all, join, regex, map, transform: 'number'|'trim'|'count'|'date'|'price'|'currency'|'clean_url', tz, absolute } | { template } }
   // container: css for each item (one row per match). Omit for a single-row page.
   S.extract = (fields, container) => {
@@ -395,9 +459,7 @@
     const numeric = qd.length >= 2 && qd.length >= q.replace(/\s/g, '').length * 0.5;
     const hits = [];
     const matches = (t) => t.includes(q) || (numeric && digits(t).includes(qd));
-    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT);
-    let el;
-    while ((el = walker.nextNode())) {
+    for (const el of allUnder(document.body)) {
       if (SKIP_TAGS.has(el.tagName)) continue;
       const t = norm(el.textContent);
       if (!t || t.length > q.length * 6 + 60) continue; // too broad; a descendant will match instead
@@ -408,7 +470,7 @@
     }
     // attribute matches (title="...", alt, value, content, href)
     if (hits.length < 10) {
-      for (const e of qsa('[title],[alt],[value],[content],[aria-label],[href],[data-price],[data-value]')) {
+      for (const e of allUnder(document.body).filter((x) => x.matches('[title],[alt],[value],[content],[aria-label],[href],[data-price],[data-value]'))) {
         for (const a of e.getAttributeNames()) {
           if (a === 'class' || a === 'style' || a.startsWith('on')) continue;
           const v = e.getAttribute(a) || '';
@@ -456,7 +518,7 @@
     const min = opts.min || 3;
     const out = [];
     const seen = new Set();
-    for (const parent of qsa('body *')) {
+    for (const parent of allUnder(document.body)) {
       if (SKIP_TAGS.has(parent.tagName) || parent.children.length < min) continue;
       if (parent.closest('nav, header, footer, [role="navigation"], [role="menu"], select, [aria-hidden="true"]')) continue;
       const groups = {};
@@ -469,7 +531,7 @@
         const key = cssPath(parent) + '|' + sig;
         if (seen.has(key)) continue;
         seen.add(key);
-        const texts = items.map((i) => norm(i.textContent));
+        const texts = items.map((i) => norm(textOf(i)));
         const avgLen = texts.reduce((a, t) => a + Math.min(t.length, 400), 0) / items.length;
         if (avgLen < 8) continue; // icon rows, pagination dots, etc.
         const distinct = new Set(texts).size / items.length;
@@ -487,7 +549,7 @@
         count: items.length,
         matches: qsa(container).length,
         score,
-        sample: cut(norm(items[0].textContent), 160),
+        sample: cut(norm(textOf(items[0])), 160),
         fields: fieldCandidates(items),
       };
     });
@@ -496,7 +558,7 @@
   const fieldCandidates = (items) => {
     const first = items[0];
     const probe = items.slice(1, 4);
-    const leaves = qsa('*', first).filter((e) => !SKIP_TAGS.has(e.tagName) && (e.children.length === 0 || e.matches('a, img, time, button')) && (norm(e.textContent) || e.matches('img, a[href], time[datetime]')));
+    const leaves = allUnder(first).filter((e) => !SKIP_TAGS.has(e.tagName) && (e.children.length === 0 || e.matches('a, img, time, button')) && (norm(e.textContent) || e.matches('img, a[href], time[datetime]')));
     const res = [];
     const seenSel = new Set();
     for (const e of leaves.slice(0, 60)) {
@@ -618,7 +680,7 @@
       const fp = saved && saved.fields && saved.fields[name];
       if (!fp) { out[name] = { status: 'lost', selector: spec.selector, fill, reason: 'no fingerprint (never seen healthy)' }; continue; }
       const cands = new Map(); // relative selector → best structure score among the elements it came from
-      for (const el of sample.length ? qsa('*', sample[0]) : []) {
+      for (const el of sample.length ? allUnder(sample[0]) : []) {
         if (SKIP_TAGS.has(el.tagName)) continue;
         if (fp.attr && !/^(text|html)$/.test(fp.attr) && !el.hasAttribute(fp.attr)) continue;
         const v0 = value(el, spec);
@@ -1356,7 +1418,7 @@
   // ---------- one-call overview ----------
   S.overview = (opts = {}) => {
     let shadow = 0;
-    for (const e of qsa('body *').slice(0, 5000)) if (e.shadowRoot) shadow++;
+    shadow = shadowRootsUnder(document).length; // nested ones too: lists inside them are found (see Shadow DOM)
     return {
       url: location.href,
       title: norm(document.title),
