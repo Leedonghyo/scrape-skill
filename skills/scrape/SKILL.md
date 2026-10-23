@@ -88,7 +88,15 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 
 ### 5. 재실행과 수리
 
-"다시 돌려줘" → `node collect.mjs <name>`. 채움률이 떨어졌거나 차단으로 멈췄으면 실패한 필드만 1단계로 돌아가 레시피를 고치고, 사이트에서 무엇이 바뀌었는지 사용자에게 말하세요.
+"다시 돌려줘" → `node collect.mjs <name>`. 수집기는 `dom` 레시피가 잘 돌 때마다 필드별 생김새(태그·클래스·경로·값의 종류·예시값)를 `~/.scrape/fingerprints/<name>.json`에 기억합니다. 사이트가 바뀌어 필드나 항목 묶음(container)이 안 맞으면 요약 JSON의 `repair`에 새 자리를 **제안만** 합니다. 레시피는 바꾸지 않습니다.
+
+- `repair.fields.<필드>` = `{ old, selector, score, fill, samples }`: 사용자에게 필드별로 "가격 자리가 바뀌었어요" + 예전/새 자리 + `samples` 3개를 표로 보여주고, 맞는지 한 번 묻습니다. 사용자가 맞다고 하면 `node collect.mjs <name> --repair --apply`를 실행합니다. 레시피를 `<name>.bak.json`으로 백업하고 새 자리를 쓴 뒤 첫 페이지를 다시 확인해, `applied.verified.fill_rate`로 결과를 알려줍니다. 그다음 평소처럼 수집합니다.
+- `repair.container`: 항목 묶음이 바뀐 경우입니다. `{ old, selector, count }`이면 위와 같이 묻고 적용합니다. `{ lost: true }`이면 찾지 못한 것입니다.
+- `repair.lost`: 예전에는 됐는데 이제 페이지에 없는 필드입니다. 그럴듯한 다른 값으로 메우지 않았다는 뜻이니, 사이트에서 그 정보가 빠졌는지 사용자에게 말하고 1단계 방식(`findByText`)으로 직접 찾습니다.
+- `repair.unlearned`: 한 번도 잘 돈 적이 없어 기억이 없는 빈 필드입니다. 1단계로 돌아가 고칩니다.
+- 먼저 확인만 하려면 `--repair`만 씁니다. 첫 페이지만 보고 아무것도 쓰지 않습니다.
+
+차단으로 멈췄으면 차단 사다리로 갑니다. 무엇이 바뀌었는지는 항상 사용자에게 말하세요.
 
 ## 상황별 대응: 사실, 선택지, 추천 — 결정은 사용자
 
@@ -150,12 +158,13 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 | `await robots(path)` | 이 출처의 robots.txt 판정. `crawl_delay`(초)가 있으면 그 값 × 1000을 `rate.delay_ms`의 하한으로 쓴다 |
 | `await autoScroll({rounds, container})` | 무한 스크롤 테스트. 스크롤 후 항목 수. 레딧처럼 지난 글을 지우는 피드는 수가 줄기도 하지만, 수집기가 라운드마다 행을 모으므로 `pages.type: scroll` 그대로 됩니다 |
 | `collectInto(fields, container, {dedupe_key, reset})` | 실제 브라우저 폴백: 이 페이지를 추출해 localStorage에 누적(네비게이션을 넘어 유지) |
+| `fingerprint(fields, container)` / `relocate(fields, container, saved)` | 필드별 생김새 기억 / 바뀐 페이지에서 새 자리 제안(`ok`·`moved`·`lost`). 수집기가 자동으로 부르니 직접 쓸 일은 드뭅니다 |
 | `drain()` / `collectStatus()` | 모은 것 전부 반환+비움 / 지금까지 개수 `{ total }`. 목표 개수에서 멈추려면 `collectStatus().total >= N`을 보세요 |
 
 수집기:
 
 ```
-node <skill-dir>/scripts/collect.mjs <name|recipe.json> [--dry-run] [--max-pages N] [--limit N] [--out PATH] [--format csv|json|jsonl|xlsx] [--headful] [--wait-for-human] [--cdp PORT|URL] [--resume]
+node <skill-dir>/scripts/collect.mjs <name|recipe.json> [--dry-run] [--max-pages N] [--limit N] [--out PATH] [--format csv|json|jsonl|xlsx] [--headful] [--wait-for-human] [--cdp PORT|URL] [--resume] [--repair [--apply]]
 ```
 종료 코드: 0 성공 · 1 레시피 오류 · 2 브라우저/환경 · 3 차단 또는 로그인 필요.
 
@@ -169,6 +178,6 @@ node <skill-dir>/scripts/har-scan.mjs <file.har> [--match "화면에 보이는 �
 node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <key> [--limit N] [--out PATH] [--format csv|json|jsonl|xlsx]
 ```
 
-파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.
+파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 필드 기억 `~/.scrape/fingerprints/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.
 
 필요할 때 읽기: `references/recipe.md`(형식), `references/strategies.md`(숨은 API, 지문 보호 API 가로채기, 코드 속 엔드포인트·소스맵 단서, 토큰·서명 출처, HAR에서 API 찾기, SPA 대기, 무한 스크롤, 상세 페이지, 표, iframe, 셀렉터 안정성), `references/blocks.md`(벤더, 계층, 문구), `references/messages.md`(문구), `references/cli-browser.md`(MCP가 없을 때 Playwright CLI로 하는 법), `examples/`(동작하는 레시피).

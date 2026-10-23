@@ -66,6 +66,10 @@ Just ask. Words like "collect", "scrape", "crawl", "grab" or "pull into a spread
 
 Results go to `~/Downloads/<name>-<date>.csv` (UTF-8 with BOM, so Excel opens it cleanly), or `.xlsx` if you ask for an Excel file. Prices can come out as numbers with a separate currency column, relative times like "3 hours ago" as real timestamps, and links without tracking parameters. Recipes live in `~/.scrape/recipes/`.
 
+## When a site is redesigned
+
+Every run that works teaches the collector what each field looks like. If the site changes later and a column comes back empty, the run tells you where the field most likely moved, with sample values, instead of quietly saving empty columns. Say yes and it updates the recipe (keeping a backup), checks the page again, and carries on. A field that really disappeared is reported as missing, not filled with something that merely looks similar.
+
 ## When a site pushes back
 
 It tells you what's happening and **you decide**. It never works around a site silently, and never gives up silently.
@@ -117,13 +121,13 @@ npm test              # offline unit tests + live runs of the example recipes (s
 npm run test:offline  # unit tests only
 ```
 
-188 tests in total: 157 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, feeds that drop old posts, captcha walls vs. harmless widgets).
+195 tests in total: 158 offline unit tests, plus live end-to-end runs of every strategy (dom, http, embedded, detail pages, infinite scroll, intercept over HTTP/WebSocket/SSE, cursor and next-URL pagination, session restore, resume, self-repair after a redesign (moved fields, renamed container, a field that is really gone), feeds that drop old posts, captcha walls vs. harmless widgets).
 
 ## Limits and what's next
 
 This is v0.7, aimed first at shop listings, news and blog lists, and job boards.
 
-- Works: infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files, xlsx output, price/currency/relative-time/tracking-link cleanup
+- Works: self-repair when a site is redesigned (proposes new places for broken fields, applied only after you confirm), infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files, xlsx output, price/currency/relative-time/tracking-link cleanup
 - Not yet: shadow DOM, content inside iframes, non-Protobuf binary formats (MessagePack, CBOR)
 - Next: scheduled runs and change tracking, a login helper, an MCP wrapper for other LLMs
 

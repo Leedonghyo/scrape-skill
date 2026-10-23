@@ -516,6 +516,172 @@
     return res;
   };
 
+  // ---------- recipe self-repair: fingerprints and relocation ----------
+  // A healthy run remembers what each field's element looks like (fingerprint). When a redesign breaks a selector,
+  // every element in the items is scored against that memory and the best place is PROPOSED with samples; nothing
+  // here changes a recipe. Inspired by Scrapling's adaptive tracking, but the person confirms before it is applied.
+  const STABLE_ATTRS = ['itemprop', 'data-testid', 'data-test', 'data-qa', 'data-cy', 'name', 'role', 'rel', 'type', 'aria-label'];
+  const stableClasses = (el) => [...el.classList].filter((c) => !hashy(c) && !STATE_CLASS.test(c));
+  // What kind of value a field holds, so a moved price is not "repaired" onto a nearby "In stock" label.
+  const kindOf = (v) => {
+    if (v == null || v === '' || (Array.isArray(v) && !v.length)) return 'empty';
+    if (typeof v === 'number') return 'number';
+    if (typeof v === 'boolean') return 'bool';
+    const s = norm(Array.isArray(v) ? v.join(' ') : v);
+    if (/^(https?:)?\/\/\S+$|^\/\S*$/.test(s)) return 'url';
+    if (s.length < 30 && /\d/.test(s) && /[£€$¥￥₩₹₽₫฿원円元]|\b[A-Z]{3}\s?\d/.test(s)) return 'price';
+    if (s.length < 40 && /^\d{4}-\d{2}-\d{2}|\d{1,2}:\d{2}|\b(?:ago|yesterday)\b|(?:전|前)$/.test(s)) return 'date';
+    if (/^[-+]?[\d.,\s%]+$/.test(s)) return 'number';
+    return s.length > 80 ? 'longtext' : 'text';
+  };
+  const elPrint = (el, root) => {
+    const chain = [];
+    for (let cur = el; cur && cur !== root && cur.nodeType === 1; cur = cur.parentElement) chain.unshift(tag(cur));
+    const p = el.parentElement;
+    const keyAttrs = {};
+    for (const a of STABLE_ATTRS) { const v = el.getAttribute(a); if (v != null && v.length < 60) keyAttrs[a] = v; }
+    return {
+      tag: tag(el),
+      classes: stableClasses(el).slice(0, 6),
+      attrs: el.getAttributeNames().filter((a) => !/^(class|style|id)$/.test(a)).sort().slice(0, 12),
+      keyAttrs,
+      path: chain.slice(-6),
+      parent: p && p !== root ? { tag: tag(p), classes: stableClasses(p).slice(0, 4) } : null,
+      siblings: p ? [...new Set([...p.children].filter((c) => c !== el).map(tag))].slice(0, 8) : [],
+    };
+  };
+  const jaccard = (a = [], b = []) => {
+    if (!a.length && !b.length) return 1;
+    const A = new Set(a);
+    return b.filter((x) => A.has(x)).length / new Set([...a, ...b]).size;
+  };
+  const lcsRatio = (a = [], b = []) => {
+    const dp = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0));
+    for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++) dp[i][j] = a[i - 1] === b[j - 1] ? dp[i - 1][j - 1] + 1 : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    return dp[a.length][b.length] / Math.max(a.length, b.length, 1);
+  };
+  // 0..1: how much a candidate element looks like the remembered one (structure only; values are scored apart).
+  const structScore = (pr, fp) => {
+    const keys = Object.keys(fp.keyAttrs || {});
+    const key = keys.length ? keys.filter((k) => pr.keyAttrs[k] === fp.keyAttrs[k]).length / keys.length : Object.keys(pr.keyAttrs).length ? 0.5 : 1;
+    const parent = !pr.parent && !fp.parent ? 1 : !pr.parent || !fp.parent ? 0 : 0.5 * (pr.parent.tag === fp.parent.tag) + 0.5 * jaccard(pr.parent.classes, fp.parent.classes);
+    return 0.2 * (pr.tag === fp.tag) + 0.25 * jaccard(pr.classes, fp.classes) + 0.1 * jaccard(pr.attrs, fp.attrs) + 0.15 * key
+      + 0.1 * lcsRatio(pr.path, fp.path) + 0.1 * parent + 0.1 * jaccard(pr.siblings, fp.siblings);
+  };
+  const fieldSpec = (raw) => (typeof raw === 'string' ? { selector: raw } : raw || {});
+  // Fields a fingerprint can stand for: one element inside the item, found by a selector.
+  const repairable = (spec) => typeof spec.selector === 'string' && spec.template == null && spec.transform !== 'count' && !spec.all && !/^\+/.test(spec.selector) && spec.selector !== ':scope';
+  const valuesOf = (spec, sel, items) => items.map((it) => { const e = resolve(sel, it)[0]; return e ? value(e, spec) : null; });
+  // The kind is read before the transform: "Book number 1" through transform "price" is the number 1, but the text
+  // is still a title, not a price. regex/map stay, so a star rating read from a class keeps its kind.
+  const rawKind = (e, spec) => kindOf(value(e, { ...spec, transform: undefined }));
+  const kindsOf = (spec, sel, items) => items.map((it) => { const e = resolve(sel, it)[0]; return e ? rawKind(e, spec) : 'empty'; }).filter((k) => k !== 'empty');
+  const specificity = (sel) => (sel.match(/[.#[]/g) || []).length;
+  const filled = (vals) => vals.filter((v) => v != null && v !== '').length;
+  const SPECIFIC_KINDS = new Set(['price', 'number', 'date', 'url']);
+
+  // fingerprint(fields, container) → what each healthy field (filled in >= min_fill of the items) looks like now.
+  S.fingerprint = (fields, container, opts = {}) => {
+    const items = container ? qsa(container) : [];
+    if (!items.length) return null;
+    const minFill = opts.min_fill ?? 0.9;
+    const out = { container: { selector: container, count: items.length, ...elPrint(items[0], items[0].parentElement && items[0].parentElement.parentElement) }, fields: {} };
+    for (const [name, raw] of Object.entries(fields || {})) {
+      const spec = fieldSpec(raw);
+      if (!repairable(spec)) continue;
+      const vals = valuesOf(spec, spec.selector, items);
+      if (filled(vals) / items.length < minFill) continue;
+      const first = items.map((it) => resolve(spec.selector, it)[0]).find(Boolean);
+      const kinds = {};
+      for (const k of kindsOf(spec, spec.selector, items)) kinds[k] = (kinds[k] || 0) + 1;
+      out.fields[name] = {
+        selector: spec.selector,
+        attr: spec.attr || 'text',
+        kind: Object.entries(kinds).sort((a, b) => b[1] - a[1])[0][0],
+        examples: [...new Set(vals.filter((v) => v != null && v !== '').map((v) => cut(String(v), 80)))].slice(0, 5),
+        print: elPrint(first, items[items.indexOf(first.closest(container))] || first.parentElement),
+      };
+    }
+    return out;
+  };
+
+  const relocateFields = (fields, items, saved, opts) => {
+    const threshold = opts.threshold ?? 0.55;
+    const brokenBelow = opts.broken_below ?? 0.5;
+    const out = {};
+    const sample = items.slice(0, 8);
+    for (const [name, raw] of Object.entries(fields || {})) {
+      const spec = fieldSpec(raw);
+      if (!repairable(spec)) continue;
+      const fill = filled(valuesOf(spec, spec.selector, items)) / (items.length || 1);
+      if (fill >= brokenBelow) { out[name] = { status: 'ok', selector: spec.selector, fill: Math.round(fill * 100) / 100 }; continue; }
+      const fp = saved && saved.fields && saved.fields[name];
+      if (!fp) { out[name] = { status: 'lost', selector: spec.selector, fill, reason: 'no fingerprint (never seen healthy)' }; continue; }
+      const cands = new Map(); // relative selector → best structure score among the elements it came from
+      for (const el of sample.length ? qsa('*', sample[0]) : []) {
+        if (SKIP_TAGS.has(el.tagName)) continue;
+        if (fp.attr && !/^(text|html)$/.test(fp.attr) && !el.hasAttribute(fp.attr)) continue;
+        const v0 = value(el, spec);
+        if (v0 == null || v0 === '') continue;
+        const st = structScore(elPrint(el, sample[0]), fp.print);
+        if (st < 0.25) continue;
+        const full = pathWithin(el, sample[0]).replace(/^:scope(?: > | )/, '');
+        const anchored = el.parentElement && el.parentElement !== sample[0] ? `${ident(el.parentElement)} ${ident(el)}` : null;
+        for (const sel of new Set([full, generalize(full), ident(el), anchored].filter(Boolean))) if (!cands.has(sel) || cands.get(sel) < st) cands.set(sel, st);
+      }
+      let best = null;
+      for (const [sel, st] of cands) {
+        const vals = valuesOf(spec, sel, items);
+        const got = vals.filter((v) => v != null && v !== '');
+        if (!got.length) continue;
+        const coverage = got.length / items.length;
+        const kinds = kindsOf(spec, sel, items);
+        const kindMatch = kinds.length ? kinds.filter((k) => k === fp.kind).length / kinds.length : 0;
+        if (SPECIFIC_KINDS.has(fp.kind) && kindMatch < 0.6) continue; // a price must still look like a price
+        // a field that used to differ per item (titles) must not be mapped onto something constant (a label)
+        if ((fp.examples || []).length > 1 && items.length > 2 && new Set(got.map(String)).size === 1) continue;
+        const exampleHit = got.some((v) => (fp.examples || []).includes(cut(String(v), 80))) ? 1 : 0;
+        const score = 0.45 * st + 0.25 * coverage + 0.2 * kindMatch + 0.1 * exampleHit;
+        // equal scores: the more anchored selector ("h2.title a" over "a") survives the next unrelated link
+        if (!best || score > best.score + 1e-9 || (Math.abs(score - best.score) < 1e-9 && specificity(sel) > specificity(best.selector))) best = { selector: sel, score, coverage, samples: got.slice(0, 3) };
+      }
+      if (best && best.score >= threshold && best.coverage >= 0.6) {
+        out[name] = { status: 'moved', old: spec.selector, selector: best.selector, score: Math.round(best.score * 100) / 100, fill: Math.round(best.coverage * 100) / 100, samples: best.samples };
+      } else out[name] = { status: 'lost', selector: spec.selector, fill, best_score: best ? Math.round(best.score * 100) / 100 : 0 };
+    }
+    return out;
+  };
+
+  // relocate(fields, container, saved) → for each field: ok (still works), moved (proposed new selector, score,
+  // samples) or lost. When the container itself matches fewer than 2 items, the page's repeated blocks are tried
+  // and the one whose fields come back best is proposed as the new container.
+  S.relocate = (fields, container, saved, opts = {}) => {
+    const threshold = opts.threshold ?? 0.55;
+    const items = container ? qsa(container) : [];
+    const res = { container: { status: items.length >= 2 ? 'ok' : 'lost', selector: container, count: items.length }, fields: {} };
+    if (items.length >= 2 || !saved || !saved.container) {
+      res.fields = relocateFields(fields, items, saved, opts);
+      return res;
+    }
+    let best = null;
+    for (const list of S.detectLists({ limit: 8 })) {
+      const its = qsa(list.container);
+      if (its.length < 2) continue;
+      const cs = structScore(elPrint(its[0], its[0].parentElement && its[0].parentElement.parentElement), saved.container);
+      const f = relocateFields(fields, its, saved, opts);
+      const names = Object.keys(f);
+      const found = names.length ? names.filter((n) => f[n].status !== 'lost').length / names.length : 0;
+      const score = 0.3 * cs + 0.7 * found;
+      if (!best || score > best.score) best = { selector: list.container, count: its.length, score, f };
+    }
+    if (best && best.score >= threshold) {
+      res.container = { status: 'moved', old: container, selector: best.selector, count: best.count, score: Math.round(best.score * 100) / 100 };
+      res.fields = best.f;
+    } else res.fields = relocateFields(fields, [], saved, opts);
+    return res;
+  };
+  S.kindOf = kindOf;
+
   // ---------- embedded data (JSON the page already ships) ----------
   const shape = (v, depth = 2) => {
     if (v === null) return 'null';

@@ -123,6 +123,16 @@ Turn what the page shows into values a spreadsheet can sort and sum, inside the 
 
 For a price, use two fields on the same element: `{ "selector": ".price", "transform": "price" }` and `{ "selector": ".price", "transform": "currency" }`. `number` keeps its old behavior, so existing recipes produce the same values.
 
+## Self-repair (dom)
+
+The collector keeps a memory of every healthy field of a `dom` recipe, so a redesign does not mean starting over.
+
+- **Learning**: on the first list page of each run, every field filled in at least 90% of 3+ items is fingerprinted into `~/.scrape/fingerprints/<name>.json`. The fingerprint records tag, stable classes, attribute names, `itemprop`/`data-testid`-style attribute values, the tag path inside the item, parent and sibling tags, the kind of value (`price`, `number`, `date`, `url`, `text`, read before `transform`) and up to five example values. A field that is broken now keeps its old fingerprint. Existing recipes start learning on their next run.
+- **Checking**: a field below 50% filled, or a container matching fewer than 2 items, is relocated. Every element of the items is scored: 45% structure (the fingerprint), 25% how many items the candidate selector fills, 20% whether the values are still the same kind, 10% whether a remembered example reappears. A field whose kind was `price`/`number`/`date`/`url` must keep that kind, and a field whose values used to differ cannot move onto a constant label. A score of 0.55 and 60% coverage are needed to propose anything. For a lost container, the page's repeated blocks are tried and the one whose fields come back best is proposed.
+- **Proposing**: the summary line gets `repair` (`fields` with `old`, `selector`, `score`, `fill`, `samples`; `container`; `lost`; `unlearned`) and a hint. The recipe is not changed.
+- **Applying**: `--repair` checks the first page only. `--repair --apply` copies the recipe to `<name>.bak.json`, writes the proposed selectors (other keys such as `attr`, `regex`, `transform` are kept), re-runs the first page with the new recipe and reports `applied.verified`.
+- Not covered: `+ ` sibling fields, `:scope`, `all`, `count`, templates, detail-page fields, and `http`/`embedded`/`intercept` paths.
+
 ## Finishing rows
 
 Whatever a person would fix in the CSV after the run belongs in the recipe, so "run it again" gives the same table:

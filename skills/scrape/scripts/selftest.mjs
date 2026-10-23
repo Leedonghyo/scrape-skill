@@ -98,6 +98,21 @@ function fixtureServer(port = 0) {
   addEventListener('scroll', () => { if (done || innerHeight + scrollY < document.body.scrollHeight - 400) return; done = true; setTimeout(() => document.getElementById('list').insertAdjacentHTML('beforeend', tail), 150); });
 </script></body></html>`);
     }
+    // A shop before and after redesigns, for recipe self-repair. v1 is what the recipe was written for; v2 moves
+    // the title and price into new elements, v3 renames the item container, v4 drops the price altogether.
+    if (u.pathname === '/redesign') {
+      const v = Number(u.searchParams.get('v') || 1);
+      const card = (b) => {
+        const stars = `<p class="star-rating ${['One', 'Two', 'Three', 'Four', 'Five'][b.id % 5]}"></p>`;
+        const stock = '<p class="instock availability">In stock</p>';
+        if (v === 2) return `<article class="product_pod"><div class="thumb"></div><h2 class="title"><a href="/b/${b.id}" title="${b.title}">${b.title}</a></h2>${stars}<div class="price-box"><span class="amount">£${b.price}</span>${stock}</div></article>`;
+        const inner = `<h3><a href="/b/${b.id}" title="${b.title}">${b.title}</a></h3>${stars}<div class="product_price">${v === 4 ? '' : `<p class="price_color">£${b.price}</p>`}${stock}</div>`;
+        return v === 3 ? `<div class="book-card"><div class="book-body">${inner}</div></div>` : `<article class="product_pod">${inner}</article>`;
+      };
+      const books = Array.from({ length: 12 }, (_, i) => ({ id: i + 1, title: `Book number ${i + 1}`, price: (10 + i * 3.25).toFixed(2) }));
+      const list = v === 3 ? `<section class="grid">${books.map(card).join('')}</section>` : `<ol class="row">${books.map((b) => `<li class="col">${card(b)}</li>`).join('')}</ol>`;
+      return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture books v${v}</title></head><body><header><nav><a href="/">Home</a> <a href="/about">About us and our long history of selling books</a></nav></header><main><h1>All products</h1>${list}</main><footer>© Fixture books</footer></body></html>`);
+    }
     // Virtualized feed (Reddit, X): 50 posts, 10 per load, but only the newest 15 stay in the DOM.
     if (u.pathname === '/recycle') return send(res, 200, 'text/html; charset=utf-8', `<!doctype html><html><head><meta charset="utf-8"><title>Fixture recycle</title></head><body><ul id="list"></ul><script>
   let next = 1, busy = false;
@@ -314,6 +329,8 @@ const URLS = [
     cur: ${JSON.stringify(CURRENCIES.map(([i]) => i))}.map((v) => window.__scrape.toCurrency(v)),
     url: ${JSON.stringify(URLS.map(([i]) => i))}.map((v) => window.__scrape.cleanUrl(v)) })`, g));
   ok('page helpers give the same answers as lib (date, price, currency, clean_url)', eq(inPage, { rel: REL.map(([, w]) => w), price: PRICES.map(([, w]) => w), cur: CURRENCIES.map(([, w]) => w), url: URLS.map(([, w]) => w) }), inPage);
+  const kinds = JSON.parse(vm.runInContext(`JSON.stringify(['£10.00', 'Book number 1', '/b/1', 'https://a.test/x', '2026-10-23 10:00', '3 hours ago', '1,234', 12, ''].map(window.__scrape.kindOf))`, g));
+  ok('repair: value kinds tell a price from a title that contains a number', eq(kinds, ['price', 'text', 'url', 'url', 'date', 'date', 'number', 'number', 'empty']), kinds);
   let typo = '';
   try { validateRecipe({ version: 1, name: 't', strategy: 'dom', pages: { type: 'single', start: 'https://a.test/' }, items: { container: 'li' }, fields: { p: { selector: '.p', transform: 'prise' } } }); } catch (e) { typo = e.message; }
   ok('validate: a misspelled transform is refused', /transform.*must be one of/.test(typo), typo);
@@ -771,6 +788,39 @@ if (!offline) {
   const resumed = fs.existsSync(rest.out) ? fs.readFileSync(rest.out, 'utf8').trim().split('\n').length - 1 : 0;
   ok('live cursor --resume: 10 rows, then the other 10 from the saved cursor', part.summary.rows === 10 && part.summary.stopped_reason === 'max_pages' && rest.summary.rows === 10 && rest.summary.rows_previous === 10 && rest.summary.stopped_reason === 'cursor_end' && resumed === 20,
     { first: part.summary.rows, firstStop: part.summary.stopped_reason, second: rest.summary.rows, secondStop: rest.summary.stopped_reason, csvRows: resumed });
+  // self-repair: a healthy v1 run remembers each field; after redesigns the run proposes (never applies) new places,
+  // --repair --apply writes them with a backup and re-checks; a field that is really gone is reported, not invented.
+  {
+    const fpFile = path.join(os.homedir(), '.scrape', 'fingerprints', 'local-repair.json');
+    const STARS = { One: 1, Two: 2, Three: 3, Four: 4, Five: 5 };
+    const REPAIR = (v) => ({ version: 1, name: 'local-repair', source: `${FIXTURE_ORIGIN}/`, strategy: 'dom', pages: { type: 'single', start: `${FIXTURE_ORIGIN}/redesign?v=${v}` }, items: { container: 'article.product_pod' }, fields: { title: { selector: 'h3 a', attr: 'title' }, price: { selector: 'p.price_color', transform: 'price' }, rating: { selector: 'p.star-rating', attr: 'class', regex: 'star-rating (\\w+)', map: STARS }, stock: 'p.instock.availability', link: { selector: 'h3 a', attr: 'href' } }, rate: { delay_ms: 50, jitter_ms: 10 } });
+    const recipeAt = (v, tag) => { const f = local({ ...REPAIR(v), name: 'local-repair' }); const g = f.replace(/\.recipe\.json$/, `-${tag}.recipe.json`); fs.renameSync(f, g); return g; };
+    const learn = async () => { fs.rmSync(fpFile, { force: true }); return run(recipeAt(1, 'v1'), ['--dry-run']); };
+    const v1 = await learn();
+    let mem = {}; try { mem = JSON.parse(fs.readFileSync(fpFile, 'utf8')); } catch { /* */ }
+    ok('repair: a healthy run remembers every field', v1.summary.ok && !v1.summary.repair && eq(Object.keys(mem.fields || {}).sort(), ['link', 'price', 'rating', 'stock', 'title']) && mem.fields.price.kind === 'price', Object.keys(mem.fields || {}));
+    const f2 = recipeAt(2, 'v2');
+    const before = fs.readFileSync(f2, 'utf8');
+    const v2 = await run(f2, ['--dry-run']);
+    const p2 = v2.summary.repair?.fields || {};
+    ok('repair: moved fields are proposed with samples, the recipe is not touched', p2.title?.selector === 'h2.title a' && p2.link?.selector === 'h2.title a' && /span\.amount$/.test(p2.price?.selector || '') && p2.price?.samples?.[0] === 10 && !p2.rating && !p2.stock && fs.readFileSync(f2, 'utf8') === before && /--repair --apply/.test(v2.summary.hint || ''), p2);
+    const a2 = await run(f2, ['--repair', '--apply']);
+    const fixed = JSON.parse(fs.readFileSync(f2, 'utf8'));
+    ok('repair --apply: backup kept, selectors written, every column filled again', fs.existsSync(f2.replace(/\.json$/, '') + '.bak.json') && fixed.fields.title.selector === 'h2.title a' && fixed.fields.title.attr === 'title' && fixed.fields.stock === 'p.instock.availability' && a2.summary.applied?.verified?.rows === 12 && Object.values(a2.summary.applied.verified.fill_rate).every((x) => x === 1), a2.summary.applied);
+    await learn();
+    const f3 = recipeAt(3, 'v3');
+    const a3 = await run(f3, ['--repair', '--apply']);
+    ok('repair --apply: a renamed item container is found again', a3.summary.repair?.container?.selector === 'div.book-card' && JSON.parse(fs.readFileSync(f3, 'utf8')).items.container === 'div.book-card' && a3.summary.applied?.verified?.rows === 12, a3.summary.repair);
+    await learn();
+    const f4 = recipeAt(4, 'v4');
+    const before4 = fs.readFileSync(f4, 'utf8');
+    const a4 = await run(f4, ['--repair', '--apply']);
+    ok('repair: a field that is really gone is reported lost, nothing is invented or written', eq(a4.summary.repair?.lost, ['price']) && !Object.keys(a4.summary.repair?.fields || {}).length && fs.readFileSync(f4, 'utf8') === before4 && !fs.existsSync(f4.replace(/\.json$/, '') + '.bak.json'), a4.summary.repair);
+    fs.rmSync(fpFile, { force: true });
+    const n2 = await run(recipeAt(2, 'nomem'), ['--dry-run']);
+    ok('repair: with no memory, empty fields are named instead of passing silently', eq(n2.summary.repair?.unlearned, ['title', 'price', 'link']) && /no memory/.test(n2.summary.repair?.note || ''), n2.summary.repair);
+    fs.rmSync(fpFile, { force: true });
+  }
   // xlsx + --resume: the second run starts from the rows kept in ~/.scrape/state, so the workbook ends with all 20
   const xfile = path.join(tmp, 'cursor.xlsx');
   const xpart = await run(local('local-cursor'), ['--max-pages', '2', '--out', xfile]);

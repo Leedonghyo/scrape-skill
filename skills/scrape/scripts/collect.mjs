@@ -22,10 +22,13 @@ import {
 
 const USAGE = `usage: node collect.mjs <recipe.json | recipe-name> [--max-pages N] [--limit N] [--dry-run] [--out PATH]
           [--format csv|json|jsonl|xlsx] [--headless|--headful] [--resume] [--wait-for-human] [--cdp PORT|URL] [--quiet]
+          [--repair [--apply]]
 A bare name resolves to ~/.scrape/recipes/<name>.json.
+--repair checks the first page against what the recipe's fields looked like on earlier healthy runs and proposes new
+      places for fields (or the item container) a redesign broke; --apply writes them after backing up the recipe.
 --cdp attaches to a Chrome you started with --remote-debugging-port (your real browser) instead of launching one;
       it is never closed on exit. For sites even that cannot pass, see the real-browser fallback in SKILL.md.`;
-const ARGS = { 'max-pages': 'number', limit: 'number', 'dry-run': 'boolean', out: 'string', format: 'string', headless: 'boolean', headful: 'boolean', resume: 'boolean', 'wait-for-human': 'boolean', cdp: 'string', quiet: 'boolean', help: 'boolean' };
+const ARGS = { 'max-pages': 'number', limit: 'number', 'dry-run': 'boolean', out: 'string', format: 'string', headless: 'boolean', headful: 'boolean', resume: 'boolean', 'wait-for-human': 'boolean', cdp: 'string', quiet: 'boolean', repair: 'boolean', apply: 'boolean', help: 'boolean' };
 const NAV_TIMEOUT = 45_000;
 const HUMAN_WAIT_MS = 5 * 60_000;
 const INTERCEPT_TIMEOUT = 10_000; // default intercept.timeout_ms
@@ -61,7 +64,7 @@ class Collector {
     this.opts = opts;
     this.pages = recipe.pages;
     this.rate = recipe.rate || {};
-    this.dry = !!opts['dry-run'];
+    this.dry = !!opts['dry-run'] || !!opts.repair; // --repair looks at the first page only and writes no rows
     this.rows = [];        // rows collected in this run (kept in memory for fill rate / json output)
     this.flushed = 0;      // rows already written to disk
     this.previousRows = 0; // rows a resumed run had already written
@@ -324,7 +327,7 @@ class Collector {
       if (ended) this.stop = 'cursor_end';
       if (cap && !hits.length) this.stop = 'empty_page'; // nothing matched intercept.url_match at all
       if (cap) rows = this.hitRows(hits);
-      else if (container) { await harvest(); rows = [...seen.values()]; }
+      else if (container) { await harvest(); rows = [...seen.values()]; await this.health(page); }
       else rows = await this.extractDom(page, this.recipe.fields, container);
     } finally { cap?.stop(); }
     const kept = await this.acceptRows(rows);
@@ -355,6 +358,7 @@ class Collector {
         await this.applyWait(page, this.recipe.wait);
       } else await this.navigate(page, target.url, this.recipe.wait);
       const rows = cap ? this.hitRows(await this.settle(cap, page)) : await this.extractDom(page, this.recipe.fields, this.recipe.items?.container);
+      if (!cap) await this.health(page);
       let next = null;
       if (this.pages.type === 'next_link') {
         next = await page.evaluate((sel) => {
@@ -739,6 +743,48 @@ class Collector {
     throw new BlockedError(why, info);
   }
 
+  // ---------- self-repair ----------
+  // Once per run, on the first list page: remember what every healthy field looks like (~/.scrape/fingerprints),
+  // and when a field or the item container stopped matching, ask the page where it went. The answer is only a
+  // proposal in the summary; --repair --apply is what writes it into the recipe.
+  fingerprintFile() { return path.join(SCRAPE_HOME, 'fingerprints', `${this.recipe.name}.json`); }
+
+  async health(page) {
+    if (this.healthChecked || this.recipe.strategy !== 'dom' || !this.recipe.items?.container) return;
+    this.healthChecked = true;
+    const { fields } = this.recipe;
+    const container = this.recipe.items.container;
+    const file = this.fingerprintFile();
+    let saved = null;
+    try { saved = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { /* nothing learned yet */ }
+    await this.inject(page);
+    let fresh = null;
+    try { fresh = await page.evaluate(([f, c]) => window.__scrape.fingerprint(f, c), [fields, container]); } catch { return; }
+    // Learn only from a page with a real list, and only the fields that are healthy now: a broken field keeps
+    // the memory of how it looked before it broke, which is exactly what relocation needs.
+    if (fresh && fresh.container.count >= 3 && Object.keys(fresh.fields).length) {
+      saved = { recipe: this.recipe.name, source: page.url(), updated_at: new Date().toISOString(), container: fresh.container, fields: { ...(saved?.fields || {}), ...fresh.fields } };
+      try { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, JSON.stringify(saved, null, 2)); } catch { /* read-only home: repair just has less to go on */ }
+    }
+    let res;
+    try { res = await page.evaluate(([f, c, sv]) => window.__scrape.relocate(f, c, sv), [fields, container, saved]); } catch { return; }
+    const moved = Object.entries(res.fields).filter(([, x]) => x.status === 'moved');
+    // "lost" is only news for a field that used to work; a field that was always sparse is not a regression.
+    const lost = Object.entries(res.fields).filter(([k, x]) => x.status === 'lost' && saved?.fields?.[k]).map(([k]) => k);
+    // A field with no memory is reported only when it came back completely empty: a sometimes-empty column
+    // (a discount price) is normal, an always-empty one on a recipe that never worked is worth saying out loud.
+    const neverLearned = Object.entries(res.fields).filter(([k, x]) => x.status === 'lost' && !saved?.fields?.[k] && !x.fill).map(([k]) => k);
+    if (res.container.status === 'ok' && !moved.length && !lost.length && !neverLearned.length) return;
+    this.repair = { fields: Object.fromEntries(moved.map(([k, x]) => [k, { old: x.old, selector: x.selector, score: x.score, fill: x.fill, samples: x.samples }])) };
+    if (res.container.status === 'moved') this.repair.container = { old: res.container.old, selector: res.container.selector, count: res.container.count, score: res.container.score };
+    else if (res.container.status === 'lost') this.repair.container = { lost: true, selector: container };
+    if (lost.length) this.repair.lost = lost;
+    if (neverLearned.length) this.repair.unlearned = neverLearned;
+    if (neverLearned.length || (!saved && res.container.status === 'lost')) this.repair.note = 'no memory for some broken parts: fields are remembered on runs where they work, so these have to be found again by hand (findByText)';
+    const parts = [res.container.status === 'moved' ? `items: ${container} → ${res.container.selector}` : null, ...moved.map(([k, x]) => `${k}: ${x.old} → ${x.selector}`), ...lost.map((k) => `${k}: not found`)].filter(Boolean);
+    if (parts.length) this.log(`self-repair: ${parts.join(' | ')}`);
+  }
+
   async extractDom(page, fields, container) {
     await this.inject(page);
     const rows = await page.evaluate(([f, c]) => window.__scrape.extract(f, c), [fields, container || null]);
@@ -794,6 +840,12 @@ class Collector {
       }
     }
     if (this.error) out.error = this.error;
+    if (this.repair) {
+      out.repair = this.repair;
+      const proposals = Object.keys(this.repair.fields).length + (this.repair.container?.selector && this.repair.container.old ? 1 : 0);
+      if (!out.hint && proposals) out.hint = `The site changed: ${proposals} place(s) in the page moved. Show the proposals in "repair" to the user; if they agree, run: node collect.mjs ${this.recipe.name} --repair --apply`;
+    }
+    if (this.applied) out.applied = this.applied;
     out.fill_rate = fillRate(this.rows, columns);
     out.sample = this.rows.slice(0, this.dry ? 5 : 3).map(trimRow);
     return out;
@@ -812,8 +864,10 @@ async function main() {
   let opts;
   try { opts = parseArgs(process.argv.slice(2), ARGS); } catch (e) { console.error(`[collect] ${e.message}\n${USAGE}`); return 1; }
   if (opts.help || !opts._[0]) { console.error(USAGE); return opts.help ? 0 : 1; }
+  if (opts.apply && !opts.repair) { console.error(`[collect] --apply only goes with --repair\n${USAGE}`); return 1; }
   let recipe;
-  try { ({ recipe } = loadRecipe(opts._[0])); } catch (e) {
+  let recipeFile;
+  try { ({ recipe, file: recipeFile } = loadRecipe(opts._[0])); } catch (e) {
     console.error(`[collect] ${e.message}`);
     console.log(JSON.stringify({ ok: false, recipe: opts._[0], error: e.message, stopped_reason: 'error' }));
     return 1;
@@ -858,11 +912,38 @@ async function main() {
     await c.close();
   }
   if (c.dry) c.printDryRun();
+  if (opts.repair && opts.apply && !code) code = await applyRepair(c, recipe, recipeFile, opts);
   const s = c.summary();
   if (!c.dry && !c.blockedBy && !c.error) c.log(`done: ${s.rows} rows → ${s.output || '(nothing written)'} (${s.stopped_reason})`);
   if (s.hint) console.error(`[collect] ${s.hint}`);
   console.log(JSON.stringify(s));
   return code;
+}
+
+// --repair --apply: write the proposed selectors into the recipe (old file kept as <name>.bak.json), then check the
+// first page again with the new recipe so the summary shows whether the fix really fills the columns.
+async function applyRepair(c, recipe, file, opts) {
+  const r = c.repair;
+  const fields = Object.entries(r?.fields || {});
+  const container = r?.container?.old ? r.container : null;
+  if (!fields.length && !container) { c.log('self-repair: nothing to apply'); c.applied = { changed: [] }; return 0; }
+  const next = JSON.parse(JSON.stringify(recipe));
+  const changed = [];
+  if (container) { next.items.container = container.selector; changed.push(`items.container: ${container.old} → ${container.selector}`); }
+  for (const [k, x] of fields) {
+    const raw = next.fields[k];
+    next.fields[k] = typeof raw === 'string' ? x.selector : { ...raw, selector: x.selector };
+    changed.push(`${k}: ${x.old} → ${x.selector}`);
+  }
+  const backup = file.replace(/\.json$/i, '') + '.bak.json';
+  fs.copyFileSync(file, backup);
+  fs.writeFileSync(file, JSON.stringify(next, null, 2) + '\n');
+  c.log(`self-repair: applied ${changed.length} change(s) to ${file} (previous version: ${backup})`);
+  const v = new Collector(next, { ...opts, repair: false, apply: false, 'dry-run': true });
+  try { await v.run(); } catch (e) { v.error = e.message; } finally { await v.close(); }
+  const columns = unionColumns(next.fields, next.detail?.fields, v.rows);
+  c.applied = { recipe: file, backup, changed, verified: { rows: v.rows.length, fill_rate: fillRate(v.rows, columns), sample: v.rows.slice(0, 3).map(trimRow), error: v.error } };
+  return v.error ? 1 : 0;
 }
 
 main().then((code) => process.exit(code), (e) => { console.error(`[collect] fatal: ${e.stack || e}`); process.exit(1); });
