@@ -25,7 +25,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
   }
   ```
   `browser_run_code_unsafe`가 없거나 거부되면 helpers.js를 읽어 `browser_evaluate`에 `() => ( <파일 내용> )`로 넘기세요. 그 뒤로는 호출이 전부 짧습니다: `browser_evaluate  () => window.__scrape.overview()`.
-- **수집기** `node <skill-dir>/scripts/collect.mjs <recipe>` — 레시피를 여러 페이지에 걸쳐 속도 제한하며 실행하고 파일을 씁니다. Node 20 이상 필요. 머신에서 처음 쓸 때 `node <skill-dir>/scripts/doctor.mjs --fix`를 실행하세요(`playwright-core`를 scripts 폴더에 설치. 사용자의 Chrome을 쓰므로 브라우저 다운로드 없음). 한 번에 하나만 돌리세요. 수집기는 `~/.scrape/profile` 하나를 쓰므로 두 레시피를 동시에 돌리면 Chrome 프로필 잠금에 걸립니다.
+- **수집기** `node <skill-dir>/scripts/collect.mjs <recipe>` — 레시피를 여러 페이지에 걸쳐 속도 제한하며 실행하고 파일을 씁니다. Node 20 이상 필요. 머신에서 처음 쓸 때 `node <skill-dir>/scripts/doctor.mjs --fix`를 실행하세요(`playwright-core`를 scripts 폴더에 설치. 사용자의 Chrome을 쓰므로 브라우저 다운로드 없음). 플러그인 업데이트 직후처럼 빠져 있으면 수집기가 첫 실행에서 스스로 설치하고 계속합니다. 한 번에 하나만 돌리세요. 수집기는 `~/.scrape/profile` 하나를 쓰므로 두 레시피를 동시에 돌리면 Chrome 프로필 잠금에 걸립니다.
 - **HTTP 프로브** `node <skill-dir>/scripts/probe-http.mjs <url>` — 이 URL이 브라우저 없이도 되는지 판정. 빠른 전략과 브라우저 중 어느 쪽인지 결정합니다.
 
 ## 흐름
@@ -149,7 +149,7 @@ description: 스크래핑을 모르는 사람이 웹사이트에서 데이터를
 | `await robots(path)` | 이 출처의 robots.txt 판정. `crawl_delay`(초)가 있으면 그 값 × 1000을 `rate.delay_ms`의 하한으로 쓴다 |
 | `await autoScroll({rounds, container})` | 무한 스크롤 테스트. 스크롤 후 항목 수. 레딧처럼 지난 글을 지우는 피드는 수가 줄기도 하지만, 수집기가 라운드마다 행을 모으므로 `pages.type: scroll` 그대로 됩니다 |
 | `collectInto(fields, container, {dedupe_key, reset})` | 실제 브라우저 폴백: 이 페이지를 추출해 localStorage에 누적(네비게이션을 넘어 유지) |
-| `drain()` / `collectStatus()` | 모은 것 전부 반환+비움 / 지금까지 개수 |
+| `drain()` / `collectStatus()` | 모은 것 전부 반환+비움 / 지금까지 개수 `{ total }`. 목표 개수에서 멈추려면 `collectStatus().total >= N`을 보세요 |
 
 수집기:
 
@@ -165,7 +165,7 @@ node <skill-dir>/scripts/har-scan.mjs <file.har> [--match "화면에 보이는 �
 
 실제 브라우저 폴백 저장기(`drain()` 뒤 — 행을 먼저 `.json` 파일로 저장):
 ```
-node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <key> [--out PATH] [--format csv|json|jsonl]
+node <skill-dir>/scripts/write-csv.mjs <rows.json> --name <name> --dedupe-key <key> [--limit N] [--out PATH] [--format csv|json|jsonl]
 ```
 
 파일: 레시피 `~/.scrape/recipes/`, 세션 `~/.scrape/sessions/`, 이어하기 상태 `~/.scrape/state/`, 수집기 Chrome 프로필 `~/.scrape/profile/`, 출력 `~/Downloads/`.

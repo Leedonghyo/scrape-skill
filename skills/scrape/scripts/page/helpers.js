@@ -1127,7 +1127,7 @@
     autoScroll: 'await autoScroll({rounds, container}) -> infinite scroll test',
     collectInto: 'collectInto(fields, container, {dedupe_key, reset}) -> extract this page and accumulate in localStorage (real-browser fallback for blocked sites)',
     drain: 'drain() -> return everything collectInto() gathered and clear it; pass to write-csv.mjs',
-    collectStatus: 'collectStatus() -> how many rows accumulated so far',
+    collectStatus: 'collectStatus() -> { total }: how many rows accumulated so far',
   });
 
   window.__scrape = S;

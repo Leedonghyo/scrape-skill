@@ -714,6 +714,12 @@ if (!offline) {
   const wcsv = fs.existsSync(path.join(tmp, 'wc.csv')) ? fs.readFileSync(path.join(tmp, 'wc.csv')) : Buffer.alloc(0);
   ok('write-csv dedupe to 2 rows', wsum.rows === 2, wsum.rows);
   ok('write-csv has UTF-8 BOM', wcsv.length >= 3 && wcsv[0] === 0xef && wcsv[1] === 0xbb && wcsv[2] === 0xbf);
+  // --limit keeps the first N rows after dedupe (a fallback run that scrolled past the requested count)
+  const lim = spawnSync('node', [path.join(DIR, 'write-csv.mjs'), rowsFile, '--dedupe-key', 'id', '--limit', '1', '--format', 'json', '--out', path.join(tmp, 'wc-limit.json')], { encoding: 'utf8' });
+  let lrows = []; try { lrows = JSON.parse(fs.readFileSync(path.join(tmp, 'wc-limit.json'), 'utf8')); } catch { /* */ }
+  ok('write-csv --limit 1 keeps the first row', lim.status === 0 && lrows.length === 1 && lrows[0].id === '1', { status: lim.status, rows: lrows.length });
+  const badLim = spawnSync('node', [path.join(DIR, 'write-csv.mjs'), rowsFile, '--limit', '0', '--out', path.join(tmp, 'wc-bad.csv')], { encoding: 'utf8' });
+  ok('write-csv --limit 0 is refused', badLim.status === 1 && !fs.existsSync(path.join(tmp, 'wc-bad.csv')), badLim.status);
   fs.rmSync(tmp, { recursive: true, force: true });
 }
 

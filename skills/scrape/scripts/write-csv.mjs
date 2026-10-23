@@ -8,8 +8,9 @@
  * to a file and run this to get the same UTF-8-BOM CSV the collector would have produced.
  *
  * Usage:
- *   node write-csv.mjs <rows.json> [--out PATH] [--format csv|json|jsonl] [--name NAME] [--dedupe-key KEY] [--columns a,b,c]
+ *   node write-csv.mjs <rows.json> [--out PATH] [--format csv|json|jsonl] [--name NAME] [--dedupe-key KEY] [--limit N] [--columns a,b,c]
  *   cat rows.json | node write-csv.mjs - [...]
+ * --limit N keeps the first N rows after dedupe (a fallback run that scrolled past the requested count).
  * Default output: ~/Downloads/<name|scrape>-<YYYYMMDD>.csv
  * Prints one JSON line: { ok, output, rows, columns, fill_rate }.
  */
@@ -17,8 +18,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { expandHome, FORMATS, localDate, parseArgs, writeRows, unionColumns, fillRate, UsageError } from './lib.mjs';
 
-const USAGE = 'usage: node write-csv.mjs <rows.json | -> [--out PATH] [--format csv|json|jsonl] [--name NAME] [--dedupe-key KEY] [--columns a,b,c]';
-const SPEC = { out: 'string', format: 'string', name: 'string', 'dedupe-key': 'string', columns: 'string', help: 'boolean' };
+const USAGE = 'usage: node write-csv.mjs <rows.json | -> [--out PATH] [--format csv|json|jsonl] [--name NAME] [--dedupe-key KEY] [--limit N] [--columns a,b,c]';
+const SPEC = { out: 'string', format: 'string', name: 'string', 'dedupe-key': 'string', limit: 'number', columns: 'string', help: 'boolean' };
 
 function main() {
   let opts;
@@ -37,6 +38,11 @@ function main() {
     const k = opts['dedupe-key'];
     const seen = new Set();
     rows = rows.filter((r) => { const v = r && r[k]; if (v == null) return true; if (seen.has(v)) return false; seen.add(v); return true; });
+  }
+
+  if (opts.limit !== undefined) {
+    if (!Number.isInteger(opts.limit) || opts.limit < 1) { console.error('[write-csv] --limit must be a whole number of 1 or more'); return 1; }
+    rows = rows.slice(0, opts.limit);
   }
 
   const format = opts.format || 'csv';

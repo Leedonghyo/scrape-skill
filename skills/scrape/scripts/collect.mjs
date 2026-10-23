@@ -579,7 +579,15 @@ class Collector {
   async page() {
     if (this._page) return this._page;
     let pw;
-    try { pw = await import('playwright-core'); } catch { throw new EnvError(`playwright-core is not installed. Run: cd "${SCRIPTS_DIR}" && npm install --omit=dev`); }
+    // A plugin update installs each version into a fresh folder without node_modules, so the first run after
+    // an update would otherwise stop with 0 rows. Install the pinned dependency once (what doctor.mjs --fix
+    // does) and carry on; npm's output goes to stderr so the JSON summary on stdout stays clean.
+    try { pw = await import('playwright-core'); } catch {
+      console.error(`[collect] playwright-core is missing in ${SCRIPTS_DIR} (first run after an update?); installing it…`);
+      const r = spawnSync('npm', ['install', '--omit=dev', '--no-audit', '--no-fund'], { cwd: SCRIPTS_DIR, stdio: ['ignore', 2, 2], shell: process.platform === 'win32' });
+      try { if (r.status !== 0) throw new Error(); pw = await import('playwright-core'); }
+      catch { throw new EnvError(`playwright-core is not installed and installing it failed. Run: cd "${SCRIPTS_DIR}" && npm install --omit=dev`); }
+    }
     // --cdp: attach to a Chrome the user already started with --remote-debugging-port, i.e. their real,
     // non-automated browser. It carries their real profile/fingerprint, so some protections that block a
     // freshly launched Playwright browser let it through. Not guaranteed against strong anti-bot (Akamai
