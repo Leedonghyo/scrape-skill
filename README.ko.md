@@ -148,7 +148,8 @@ v0.9입니다. 쇼핑몰 목록, 뉴스·블로그 목록, 채용 공고를 먼�
   - 커서 기반 API와 GraphQL(`pages.type: cursor`, `{cursor}` 자리표시자, 이어하기), 응답이 주는 다음 페이지 주소 따라가기(`pages.type: next_url`)
   - HAR 파일로 API 찾기(`har-scan.mjs`), 사이트 코드 속 엔드포인트 후보(`apiCandidates`), 토큰·서명이 어디서 오는지 분류(`requestOrigins`), 소스맵 단서(`sourceMapHints`)
   - 엑셀 파일(xlsx) 출력, 가격·통화·상대 시각·추적 파라미터 정리
-- 아직 안 되는 것: 닫힌(closed) Shadow DOM, iframe 안의 내용, MessagePack·CBOR 등 Protobuf가 아닌 이진 형식
+  - 같은 값이 항목마다 다른 자리에 있을 때 경로 목록으로 값이 있는 첫 경로 쓰기(예: X의 긴 글과 짧은 글을 한 열로)
+- 아직 안 되는 것: 닫힌(closed) Shadow DOM, iframe 안의 내용, MessagePack·CBOR 등 Protobuf가 아닌 이진 형식, 행 번호(순위) 열 만들기(위키백과 표처럼 순위가 화면 꾸밈으로만 그려지면 데이터에 없음)
 - 다음 후보: 정기 실행과 변경 추적, 로그인 도우미, 다른 LLM용 MCP 래퍼
 
 ## 라이선스
