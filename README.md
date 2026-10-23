@@ -125,7 +125,7 @@ npm run test:offline  # unit tests only
 
 ## Limits and what's next
 
-This is v0.8, aimed first at shop listings, news and blog lists, and job boards.
+This is v0.9, aimed first at shop listings, news and blog lists, and job boards.
 
 - Works: sites built with web components (open Shadow DOM, e.g. Polymer Shop: 81/81 products read from the page), self-repair when a site is redesigned (proposes new places for broken fields, applied only after you confirm), infinite scroll (including feeds like Reddit that remove old posts as you scroll), detail pages, JSON endpoints, embedded data, two-row tables, real-browser fallback, fingerprint-protected APIs (`intercept`), live WebSocket/SSE data including binary frames (compressed JSON, Protobuf), cursor/GraphQL pagination, finding APIs from HAR files, xlsx output, price/currency/relative-time/tracking-link cleanup
 - Not yet: closed shadow roots, content inside iframes, non-Protobuf binary formats (MessagePack, CBOR)
